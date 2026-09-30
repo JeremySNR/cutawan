@@ -18,12 +18,13 @@ Signing and notarisation are planned. Until then, only download installers from 
 
 ## Choose a connection
 
-The first-run wizard offers three paths. You can switch later in **Settings → General → AI connection**. **Explore without setup** lets you look around, but processing a new video still needs one of the routes below.
+The first-run wizard offers four paths. You can switch later in **Settings → General → AI connection**. **Explore without setup** lets you look around, but processing a new video still needs one of the routes below.
 
 | Route | What it does | What you need |
 | --- | --- | --- |
 | **ChatGPT sign-in** (beta) | Uses Codex for clip finding and local Whisper for transcription. No OpenAI API key or automatic paid-API fallback. | An installed Codex CLI signed in with ChatGPT, Python 3.10+, and a local Whisper model. Your plan's Codex limits apply. [Detailed setup](chatgpt-subscription.md). |
 | **OpenAI-compatible API** | Uses your configured API endpoint for analysis. Speech can go to the transcription API or run locally with Whisper. | An API key and separately billed provider usage. A local-speech choice also needs Python 3.10+ and a model. |
+| **OpenRouter** | One OpenRouter key for clip finding with any chat model OpenRouter lists (OpenAI, Anthropic, Google and others), picked from a searchable list with suggestions at the top. Speech goes to an OpenRouter-hosted Whisper model or runs locally. | An [OpenRouter key](https://openrouter.ai/keys) and OpenRouter credits. A local-speech choice also needs Python 3.10+ and a model. |
 | **Local captions only** | Transcribes and captions a whole video without sending it to an AI service. It does not find or score short clips. | Python 3.10+ and a local Whisper model. |
 
 For either local-speech route, install Python separately first. The wizard can then create a private environment and download faster-whisper plus a **Small** or **Large v3** model into Cutawan's app-data folder after you request it. Small is the lighter download; Large v3 needs several gigabytes. The setup check does not make an AI model request. CPU transcription works but can be slow.

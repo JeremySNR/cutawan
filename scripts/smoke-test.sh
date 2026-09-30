@@ -10,7 +10,9 @@ OUT="${1:-.tmp/smoke}"
 mkdir -p "$OUT"
 npm run build >/dev/null
 SMOKE_OUT="$(realpath "$OUT")"
+# The OpenRouter pickers read a saved sample catalogue so the walk needs no network.
 CUTAWAN_USER_DATA="$SMOKE_OUT/wizard-profile" CUTAWAN_SMOKE="$SMOKE_OUT" CUTAWAN_SMOKE_WIZARD=1 \
+  CUTAWAN_OPENROUTER_CATALOG="$(realpath tests/fixtures/openrouter-catalog.json)" \
   xvfb-run -a --server-args="-screen 0 1600x1000x24" \
   npx electron . --no-sandbox --disable-gpu
 npx tsx --tsconfig tsconfig.node.json scripts/seed-demo.ts

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { analysisRequests } from './mediaJobs'
+import { OPENROUTER_API_BASE } from '@shared/openrouter'
 
 /**
  * Minimal OpenAI REST client using Node's built-in fetch, so the app has no
@@ -58,17 +59,26 @@ export function resolveOpenAiApiBase(
  */
 let settingsChatBase: string | undefined
 let settingsTranscriptionBase: string | undefined
+let openRouter = false
 
 export function configureOpenAiEndpoints(opts: {
   chatBase?: string
   transcriptionBase?: string
+  /**
+   * OpenRouter is its own provider: both chat and transcription go to
+   * openrouter.ai with the OpenRouter key, and the OpenAI base URL settings
+   * and env vars do not apply.
+   */
+  openRouter?: boolean
 }): void {
   settingsChatBase = opts.chatBase?.trim() || undefined
   settingsTranscriptionBase = opts.transcriptionBase?.trim() || undefined
+  openRouter = opts.openRouter === true
 }
 
 /** Chat completions base (analysis, captions, B-roll, visual scoring). */
 export function chatApiBase(): string {
+  if (openRouter) return OPENROUTER_API_BASE
   return resolveOpenAiApiBase(process.env.OPENAI_BASE_URL || settingsChatBase)
 }
 
@@ -78,12 +88,18 @@ export function chatApiBase(): string {
  * Whisper server can sit next to a hosted LLM.
  */
 export function transcriptionApiBase(): string {
+  if (openRouter) return OPENROUTER_API_BASE
   return resolveOpenAiApiBase(
     process.env.OPENAI_TRANSCRIPTION_BASE_URL ||
       process.env.OPENAI_BASE_URL ||
       settingsTranscriptionBase ||
       settingsChatBase
   )
+}
+
+/** OpenRouter's optional app attribution headers; nothing for other endpoints. */
+function providerHeaders(): Record<string, string> {
+  return openRouter ? { 'HTTP-Referer': 'https://github.com/JeremySNR/cutawan', 'X-Title': 'Cutawan' } : {}
 }
 
 export class OpenAIError extends Error {
@@ -232,15 +248,43 @@ export async function transcribeAudioFile(
 
       const res = await fetch(`${transcriptionApiBase()}/audio/transcriptions`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}` },
+        headers: { Authorization: `Bearer ${apiKey}`, ...providerHeaders() },
         body: form,
         signal: withTimeout(TRANSCRIBE_TIMEOUT_MS, opts.signal)
       })
       await raiseForStatus(res, 'Transcription')
-      return (await res.json()) as WhisperResponse
+      return withWordTimings((await res.json()) as WhisperResponse, model)
     },
     { signal: opts.signal }
   )
+}
+
+/**
+ * Captions need word timings. Some hosted transcription models (reachable via
+ * OpenRouter) return only segment timings: spread each segment's words across
+ * it, weighted by length. With no timings at all, fail with a fix rather than
+ * producing a transcript that cannot be captioned.
+ */
+export function withWordTimings(res: WhisperResponse, model: string): WhisperResponse {
+  if (res.words?.length || !res.text?.trim()) return res
+  const segments = res.segments?.filter(seg => seg.text.trim() && seg.end > seg.start) ?? []
+  if (!segments.length) {
+    throw new OpenAIError(
+      `The transcription model ${model} did not return timestamps. Choose a Whisper model or local transcription in Settings.`
+    )
+  }
+  const words: WhisperWord[] = []
+  for (const seg of segments) {
+    const tokens = seg.text.trim().split(/\s+/)
+    const total = tokens.reduce((sum, token) => sum + token.length, 0)
+    let at = seg.start
+    for (const token of tokens) {
+      const end = at + ((seg.end - seg.start) * token.length) / total
+      words.push({ word: token, start: at, end })
+      at = end
+    }
+  }
+  return { ...res, words }
 }
 
 export type ChatContentPart =
@@ -356,7 +400,8 @@ async function completeChatContent(
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...providerHeaders()
         },
         body: JSON.stringify(format.body),
         signal: withTimeout(CHAT_TIMEOUT_MS, signal)

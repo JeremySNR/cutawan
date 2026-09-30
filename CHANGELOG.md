@@ -6,6 +6,17 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
+## [Unreleased]
+
+### Added
+
+- **OpenRouter** is now a connection in first-run setup and Settings. Add an OpenRouter key (encrypted with your system keychain), then pick the clip-finding model from OpenRouter's full model list. The list is searchable, suggests models at the top, and shows prices, context size and image support. Transcription can use an OpenRouter-hosted Whisper model or local Whisper on your computer. **Check key** validates the key without making a model request.
+- If a hosted transcription model returns only segment timings, word timings are estimated so captions still work. A model that returns no timings at all fails with a message saying what to change.
+
+### Changed
+
+- The setup wizard no longer shows the unavailable "Claude subscription" card. Claude models can be used through OpenRouter instead.
+
 ## [0.13.0] - 2026-09-25
 
 ### Added

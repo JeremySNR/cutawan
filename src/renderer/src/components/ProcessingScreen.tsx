@@ -114,7 +114,9 @@ export default function ProcessingScreen(): React.JSX.Element {
             <>
               {settings?.subscription.provider === 'chatgpt' || settings?.subscription.localTranscription
                 ? 'Speech is transcribed locally. '
-                : 'Only the audio leaves your machine, for Whisper transcription. '}Long videos are
+                : settings?.subscription.provider === 'openrouter'
+                  ? 'Only the audio leaves your machine, for transcription through OpenRouter. '
+                  : 'Only the audio leaves your machine, for Whisper transcription. '}Long videos are
               transcribed in chunks and the transcript is saved as soon as it lands, so redoing
               this skips straight past it.
               {followSpeaker && ' Speaker tracking runs locally and is the slow part.'}
@@ -125,7 +127,9 @@ export default function ProcessingScreen(): React.JSX.Element {
                 ? 'Speech is transcribed locally; transcript text and sampled frames go to Codex for analysis. '
                 : settings?.subscription.localTranscription
                   ? 'Speech is transcribed locally; analysis uses your configured API. '
-                  : 'Transcription and analysis use your configured API. '}Long videos are transcribed in
+                  : settings?.subscription.provider === 'openrouter'
+                    ? 'Transcription and analysis go through OpenRouter. '
+                    : 'Transcription and analysis use your configured API. '}Long videos are transcribed in
               chunks. Local speech recognition can take longer on a CPU. The transcript is saved
               as soon as it completes, so retries and regenerations skip straight to analysis.
             </>

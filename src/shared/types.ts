@@ -520,6 +520,17 @@ export interface AppSettings {
    */
   transcriptionLanguage: string
   analysisModel: string
+  /** True when an OpenRouter key is stored (or OPENROUTER_API_KEY is set). */
+  hasOpenRouterKey: boolean
+  /** Masked OpenRouter key for display. Empty string when unset. */
+  openRouterKeyMasked: string
+  /** OpenRouter model id used for clip analysis, e.g. "openai/gpt-5.4-mini". */
+  openRouterModel: string
+  /**
+   * OpenRouter transcription model id, e.g. "openai/whisper-1". Unused while
+   * `subscription.localTranscription` is on.
+   */
+  openRouterTranscriptionModel: string
   /**
    * OpenAI-compatible chat base URL (Azure, OpenRouter, Groq, LM Studio,
    * Ollama). Empty string means the OpenAI default, unless OPENAI_BASE_URL
@@ -561,6 +572,10 @@ export interface SettingsUpdate {
   transcriptionModel?: string
   transcriptionLanguage?: string
   analysisModel?: string
+  /** Stored encrypted; an empty string removes the stored key. */
+  openRouterKey?: string
+  openRouterModel?: string
+  openRouterTranscriptionModel?: string
   openaiBaseUrl?: string
   transcriptionBaseUrl?: string
   encoder?: EncoderPreference

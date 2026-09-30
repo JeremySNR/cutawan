@@ -1,4 +1,6 @@
 import SubscriptionSettings from './SubscriptionSettings'
+import OpenRouterSetup, { type OpenRouterChoice } from './OpenRouterSetup'
+import { DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL } from '@shared/openrouter'
 import { DEFAULT_SUBSCRIPTION } from '@shared/subscription'
 import { useEffect, useState } from 'react'
 import {
@@ -95,6 +97,11 @@ export default function SettingsModal(): React.JSX.Element {
   const [subscription, setSubscription] = useState(settings?.subscription ?? DEFAULT_SUBSCRIPTION)
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState(settings?.analysisModel ?? 'gpt-5.4-mini')
+  const [openRouter, setOpenRouter] = useState<OpenRouterChoice>({
+    apiKey: '',
+    model: settings?.openRouterModel ?? DEFAULT_OPENROUTER_MODEL,
+    transcriptionModel: settings?.openRouterTranscriptionModel ?? DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL
+  })
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState(settings?.openaiBaseUrl ?? '')
   const [transcriptionBaseUrl, setTranscriptionBaseUrl] = useState(
     settings?.transcriptionBaseUrl ?? ''
@@ -115,9 +122,13 @@ export default function SettingsModal(): React.JSX.Element {
         subscription,
         analysisModel: model,
         openaiBaseUrl,
-        transcriptionBaseUrl
+        transcriptionBaseUrl,
+        openRouterModel: openRouter.model,
+        openRouterTranscriptionModel: openRouter.transcriptionModel,
+        ...(openRouter.apiKey.trim() ? { openRouterKey: openRouter.apiKey.trim() } : {})
       })
       setApiKey('')
+      setOpenRouter(current => ({ ...current, apiKey: '' }))
       setSaved(true)
       setTimeout(() => setSaved(false), 1500)
     } finally {
@@ -179,6 +190,10 @@ export default function SettingsModal(): React.JSX.Element {
           {section === 'general' && (
             <div className="max-w-xl">
               <SubscriptionSettings value={subscription} onChange={setSubscription} onSave={save} />
+              {subscription.provider === 'openrouter' && <div className="mb-6">
+                <OpenRouterSetup value={openRouter} onChange={patch => setOpenRouter(current => ({ ...current, ...patch }))}
+                  subscription={subscription} onSubscriptionChange={patch => setSubscription(current => ({ ...current, ...patch }))} />
+              </div>}
               {subscription.provider === 'api' && <>
               <div>
                 <label className="flex items-center gap-2 text-sm font-medium">

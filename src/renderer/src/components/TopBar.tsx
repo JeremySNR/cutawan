@@ -81,6 +81,14 @@ export default function TopBar(): React.JSX.Element {
               : download.status === 'error' ? 'Update needs attention' : 'Update available'}
           </button>
         )}
+        {settings && settings.subscription.provider === 'openrouter' && !settings.hasOpenRouterKey && (
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-medium text-amber-400 transition hover:bg-amber-500/25"
+          >
+            Add OpenRouter key to get started
+          </button>
+        )}
         {settings && settings.subscription.provider === 'api' && !settings.hasApiKey && (
           <button
             onClick={() => setSettingsOpen(true)}

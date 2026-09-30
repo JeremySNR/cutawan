@@ -19,10 +19,13 @@ import type {
   UpdateCheckResult,
   UpdateDownloadState
 } from '@shared/types'
+import type { OpenRouterCatalog } from '@shared/openrouter'
 
 const api = {
   checkSubscriptionSetup: (): Promise<{ message: string; requestsToday: number }> => ipcRenderer.invoke('settings:checkSubscription'),
   checkLocalWhisperSetup: (): Promise<{ message: string }> => ipcRenderer.invoke('settings:checkLocalWhisper'),
+  listOpenRouterModels: (refresh = false): Promise<OpenRouterCatalog> => ipcRenderer.invoke('openrouter:models', refresh),
+  checkOpenRouterKey: (key?: string): Promise<{ message: string }> => ipcRenderer.invoke('openrouter:checkKey', key),
   installLocalWhisper: (model: 'small' | 'large-v3', pythonPath: string): Promise<{ pythonPath: string; modelPath: string }> =>
     ipcRenderer.invoke('settings:installLocalWhisper', model, pythonPath),
   cancelLocalWhisperInstall: (): Promise<void> => ipcRenderer.invoke('settings:cancelLocalWhisperInstall'),

@@ -17,6 +17,7 @@ import { clearImportCookiesFile, getImportCookiesPath } from './cookies'
 import { DEFAULT_BRAND_COLORS } from '@shared/captionStyles'
 import { normalizeSizeTargetMb } from '@shared/uploadBudget'
 import { chatApiBase, configureOpenAiEndpoints } from './pipeline/openai'
+import { DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL } from '@shared/openrouter'
 
 
 interface StoredSettings {
@@ -28,6 +29,10 @@ interface StoredSettings {
   /** ISO-639-1 language code forced on Whisper, or 'auto' to auto-detect. */
   transcriptionLanguage: string
   analysisModel: string
+  /** OpenRouter key, encrypted the same way as `apiKeyEncrypted`. */
+  openRouterKeyEncrypted: string
+  openRouterModel: string
+  openRouterTranscriptionModel: string
   openaiBaseUrl: string
   transcriptionBaseUrl: string
   encoder: EncoderPreference
@@ -66,6 +71,9 @@ const DEFAULTS: StoredSettings = {
   // theirs — or 'auto' — in Settings.
   transcriptionLanguage: 'en',
   analysisModel: 'gpt-5.4-mini',
+  openRouterKeyEncrypted: '',
+  openRouterModel: DEFAULT_OPENROUTER_MODEL,
+  openRouterTranscriptionModel: DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL,
   openaiBaseUrl: '',
   transcriptionBaseUrl: '',
   encoder: 'auto',
@@ -86,7 +94,8 @@ function applyEndpoints(s: StoredSettings): void {
   configureSubscription(s.subscription)
   configureOpenAiEndpoints({
     chatBase: s.openaiBaseUrl,
-    transcriptionBase: s.transcriptionBaseUrl
+    transcriptionBase: s.transcriptionBaseUrl,
+    openRouter: s.subscription.provider === 'openrouter'
   })
 }
 
@@ -162,23 +171,40 @@ export function getApiKey(): string {
   return stored || envKey || ''
 }
 
+export function getOpenRouterKey(): string {
+  return decryptKey(load().openRouterKeyEncrypted) || process.env.OPENROUTER_API_KEY || ''
+}
+
+function maskKey(key: string): string {
+  return key.length > 8 ? `${key.slice(0, 5)}…${key.slice(-4)}` : key ? '•••' : ''
+}
+
+/** Credential for analysis (and hosted transcription) on the selected provider. */
 export function getAnalysisCredential(): string {
-  return load().subscription.provider === 'chatgpt' ? 'local-codex-subscription' : getApiKey()
+  const provider = load().subscription.provider
+  if (provider === 'chatgpt') return 'local-codex-subscription'
+  if (provider === 'openrouter') return getOpenRouterKey()
+  return getApiKey()
 }
 
 export async function getSettings(): Promise<AppSettings> {
   const s = load()
   applyEndpoints(s)
   const key = getApiKey()
+  const openRouterKey = getOpenRouterKey()
   return {
     setupComplete: s.setupComplete || Boolean(process.env.CUTAWAN_SMOKE && !process.env.CUTAWAN_SMOKE_WIZARD),
     subscription: { ...s.subscription },
     hasApiKey: key.length > 0,
-    apiKeyMasked: key.length > 8 ? `${key.slice(0, 5)}…${key.slice(-4)}` : key ? '•••' : '',
+    apiKeyMasked: maskKey(key),
     keyStorageSecure: safeStorage.isEncryptionAvailable(),
     transcriptionModel: s.transcriptionModel,
     transcriptionLanguage: s.transcriptionLanguage,
     analysisModel: s.analysisModel,
+    hasOpenRouterKey: openRouterKey.length > 0,
+    openRouterKeyMasked: maskKey(openRouterKey),
+    openRouterModel: s.openRouterModel,
+    openRouterTranscriptionModel: s.openRouterTranscriptionModel,
     openaiBaseUrl: s.openaiBaseUrl,
     transcriptionBaseUrl: s.transcriptionBaseUrl,
     openaiBaseUrlFromEnv: Boolean(process.env.OPENAI_BASE_URL?.trim()),
@@ -233,10 +259,11 @@ export function getModelPreferences(): {
   analysisProviderKey: string
 } {
   const s = load()
+  const openRouter = s.subscription.provider === 'openrouter'
   return {
-    transcriptionModel: s.transcriptionModel,
+    transcriptionModel: openRouter ? s.openRouterTranscriptionModel : s.transcriptionModel,
     transcriptionLanguage: s.transcriptionLanguage,
-    analysisModel: s.analysisModel,
+    analysisModel: openRouter ? s.openRouterModel : s.analysisModel,
     analysisProviderKey: s.subscription.provider === 'chatgpt'
       ? `chatgpt:${s.subscription.codexModel}:low`
       : `api:${chatApiBase()}`
@@ -256,6 +283,13 @@ export async function updateSettings(update: SettingsUpdate): Promise<AppSetting
   }
   if (update.analysisModel !== undefined && update.analysisModel.trim()) {
     s.analysisModel = update.analysisModel.trim()
+  }
+  if (update.openRouterKey !== undefined) s.openRouterKeyEncrypted = encryptKey(update.openRouterKey.trim())
+  if (update.openRouterModel !== undefined && update.openRouterModel.trim()) {
+    s.openRouterModel = update.openRouterModel.trim()
+  }
+  if (update.openRouterTranscriptionModel !== undefined && update.openRouterTranscriptionModel.trim()) {
+    s.openRouterTranscriptionModel = update.openRouterTranscriptionModel.trim()
   }
   if (update.openaiBaseUrl !== undefined) s.openaiBaseUrl = storedBaseUrl(update.openaiBaseUrl)
   if (update.transcriptionBaseUrl !== undefined) {

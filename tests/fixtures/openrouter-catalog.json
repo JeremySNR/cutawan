@@ -1,0 +1,396 @@
+{
+ "_note": "Sample OpenRouter /models responses for offline tests and headless screenshots. Prices and context sizes are illustrative, not live data.",
+ "models": {
+  "data": [
+   {
+    "id": "openai/gpt-5.4-mini",
+    "name": "OpenAI: GPT-5.4 Mini",
+    "context_length": 400000,
+    "pricing": {
+     "prompt": "0.00000025",
+     "completion": "0.000002"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "openai/gpt-5.5",
+    "name": "OpenAI: GPT-5.5",
+    "context_length": 400000,
+    "pricing": {
+     "prompt": "0.000005",
+     "completion": "0.00003"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "openai/gpt-5.4",
+    "name": "OpenAI: GPT-5.4",
+    "context_length": 400000,
+    "pricing": {
+     "prompt": "0.00000125",
+     "completion": "0.00001"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "openai/gpt-4o-mini",
+    "name": "OpenAI: GPT-4o-mini",
+    "context_length": 128000,
+    "pricing": {
+     "prompt": "0.00000015",
+     "completion": "0.0000006"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "google/gemini-3.8-flash",
+    "name": "Google: Gemini 3.8 Flash",
+    "context_length": 1048576,
+    "pricing": {
+     "prompt": "0.00000075",
+     "completion": "0.00000375"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "google/gemini-3.8-pro",
+    "name": "Google: Gemini 3.8 Pro",
+    "context_length": 1048576,
+    "pricing": {
+     "prompt": "0.0000025",
+     "completion": "0.000015"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "anthropic/claude-sonnet-5",
+    "name": "Anthropic: Claude Sonnet 5",
+    "context_length": 1000000,
+    "pricing": {
+     "prompt": "0.000002",
+     "completion": "0.00001"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "anthropic/claude-haiku-4.5",
+    "name": "Anthropic: Claude Haiku 4.5",
+    "context_length": 200000,
+    "pricing": {
+     "prompt": "0.000001",
+     "completion": "0.000005"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "anthropic/claude-opus-5",
+    "name": "Anthropic: Claude Opus 5",
+    "context_length": 1000000,
+    "pricing": {
+     "prompt": "0.000005",
+     "completion": "0.000025"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "meta-llama/llama-4-maverick",
+    "name": "Meta: Llama 4 Maverick",
+    "context_length": 1048576,
+    "pricing": {
+     "prompt": "0.00000015",
+     "completion": "0.0000006"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "mistralai/mistral-medium-3.1",
+    "name": "Mistral: Mistral Medium 3.1",
+    "context_length": 131072,
+    "pricing": {
+     "prompt": "0.0000004",
+     "completion": "0.000002"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "deepseek/deepseek-v3.2",
+    "name": "DeepSeek: DeepSeek V3.2",
+    "context_length": 163840,
+    "pricing": {
+     "prompt": "0.00000027",
+     "completion": "0.0000004"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "qwen/qwen3-235b-a22b",
+    "name": "Qwen: Qwen3 235B A22B",
+    "context_length": 131072,
+    "pricing": {
+     "prompt": "0.00000013",
+     "completion": "0.0000006"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "x-ai/grok-4-fast",
+    "name": "xAI: Grok 4 Fast",
+    "context_length": 2000000,
+    "pricing": {
+     "prompt": "0.0000002",
+     "completion": "0.0000005"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "moonshotai/kimi-k2",
+    "name": "MoonshotAI: Kimi K2",
+    "context_length": 131072,
+    "pricing": {
+     "prompt": "0.0000005",
+     "completion": "0.0000024"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "openai/gpt-oss-120b:free",
+    "name": "OpenAI: gpt-oss-120b (free)",
+    "context_length": 131072,
+    "pricing": {
+     "prompt": "0.",
+     "completion": "0."
+    },
+    "architecture": {
+     "input_modalities": [
+      "text"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "openrouter/auto",
+    "name": "Auto Router",
+    "context_length": 2000000,
+    "pricing": {
+     "prompt": "-1",
+     "completion": "-1"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "text"
+     ]
+    }
+   },
+   {
+    "id": "openai/gpt-image-1",
+    "name": "OpenAI: GPT Image 1",
+    "context_length": 0,
+    "pricing": {
+     "prompt": "0.000005",
+     "completion": "0.00004"
+    },
+    "architecture": {
+     "input_modalities": [
+      "text",
+      "image"
+     ],
+     "output_modalities": [
+      "image"
+     ]
+    }
+   }
+  ]
+ },
+ "transcription": {
+  "data": [
+   {
+    "id": "openai/whisper-1",
+    "name": "OpenAI: Whisper",
+    "architecture": {
+     "input_modalities": [
+      "audio"
+     ],
+     "output_modalities": [
+      "transcription"
+     ]
+    },
+    "pricing": {}
+   },
+   {
+    "id": "openai/whisper-large-v3-turbo",
+    "name": "OpenAI: Whisper Large v3 Turbo",
+    "architecture": {
+     "input_modalities": [
+      "audio"
+     ],
+     "output_modalities": [
+      "transcription"
+     ]
+    },
+    "pricing": {}
+   },
+   {
+    "id": "openai/whisper-large-v3",
+    "name": "OpenAI: Whisper Large v3",
+    "architecture": {
+     "input_modalities": [
+      "audio"
+     ],
+     "output_modalities": [
+      "transcription"
+     ]
+    },
+    "pricing": {}
+   },
+   {
+    "id": "openai/gpt-4o-transcribe",
+    "name": "OpenAI: GPT-4o Transcribe",
+    "architecture": {
+     "input_modalities": [
+      "audio"
+     ],
+     "output_modalities": [
+      "transcription"
+     ]
+    },
+    "pricing": {}
+   },
+   {
+    "id": "mistralai/voxtral-mini-transcribe",
+    "name": "Mistral: Voxtral Mini Transcribe",
+    "architecture": {
+     "input_modalities": [
+      "audio"
+     ],
+     "output_modalities": [
+      "transcription"
+     ]
+    },
+    "pricing": {}
+   }
+  ]
+ }
+}

@@ -1,11 +1,11 @@
 export interface SubscriptionSettings {
-  provider: 'api' | 'chatgpt'
+  provider: 'api' | 'chatgpt' | 'openrouter'
   codexPath: string
   codexModel: string
   dailyRequestLimit: number
   pythonPath: string
   whisperModelPath: string
-  /** Use local faster-whisper even when analysis uses an API. */
+  /** Use local faster-whisper even when analysis uses an API (OpenAI-compatible or OpenRouter). */
   localTranscription: boolean
 }
 
@@ -25,7 +25,7 @@ export const DEFAULT_SUBSCRIPTION: SubscriptionSettings = {
 export function normalizeSubscription(value?: Partial<SubscriptionSettings>): SubscriptionSettings {
   const limit = value?.dailyRequestLimit
   return {
-    provider: value?.provider === 'chatgpt' ? 'chatgpt' : 'api',
+    provider: value?.provider === 'chatgpt' || value?.provider === 'openrouter' ? value.provider : 'api',
     codexPath: value?.codexPath?.trim() || DEFAULT_SUBSCRIPTION.codexPath,
     codexModel: value?.codexModel?.trim() || DEFAULT_SUBSCRIPTION.codexModel,
     dailyRequestLimit: typeof limit === 'number' && Number.isFinite(limit)
