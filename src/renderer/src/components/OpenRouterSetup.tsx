@@ -4,7 +4,7 @@ import type { SubscriptionSettings } from '@shared/subscription'
 import {
   OPENROUTER_KEYS_URL,
   SUGGESTED_OPENROUTER_MODELS,
-  SUGGESTED_OPENROUTER_TRANSCRIPTION_MODELS,
+  OPENROUTER_TRANSCRIPTION_MODELS,
   type OpenRouterCatalog
 } from '@shared/openrouter'
 import { useStore } from '../store'
@@ -94,13 +94,14 @@ export default function OpenRouterSetup({ value, onChange, subscription, onSubsc
         if (id === LOCAL_WHISPER) onSubscriptionChange({ localTranscription: true })
         else { onSubscriptionChange({ localTranscription: false }); onChange({ transcriptionModel: id }) }
       }}
-      models={catalog?.transcription ?? []} suggested={SUGGESTED_OPENROUTER_TRANSCRIPTION_MODELS} pinned={[LOCAL_OPTION]} loading={!catalog} />
+      models={catalog?.transcription ?? []} suggested={OPENROUTER_TRANSCRIPTION_MODELS} pinned={[LOCAL_OPTION]} loading={!catalog}
+      allowCustom={false} suggestedTitle="Via OpenRouter · word timestamps" />
     <p className="-mt-2 text-[11px] leading-relaxed text-zinc-500">
-      Captions need word timestamps; Whisper models provide them. Other models fall back to estimated word timing.
+      Captions need a timestamp for every word. On OpenRouter only the Whisper models return them, so other transcription models aren’t offered.
     </p>
 
     {catalog && !catalog.live && <p className="rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-400">
-      Couldn’t load OpenRouter’s model list{catalog.error ? ` (${catalog.error})` : ''}. Showing suggested models; you can also type any model id.
+      Couldn’t load OpenRouter’s model list{catalog.error ? ` (${catalog.error})` : ''}. Showing suggested models; you can also type any clip-finding model id.
     </p>}
 
     {subscription.localTranscription && <div className="space-y-3 rounded-lg border border-surface-700 p-3">

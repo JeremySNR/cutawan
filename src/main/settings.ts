@@ -17,7 +17,7 @@ import { clearImportCookiesFile, getImportCookiesPath } from './cookies'
 import { DEFAULT_BRAND_COLORS } from '@shared/captionStyles'
 import { normalizeSizeTargetMb } from '@shared/uploadBudget'
 import { chatApiBase, configureOpenAiEndpoints } from './pipeline/openai'
-import { DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL } from '@shared/openrouter'
+import { DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL, isSupportedTranscriptionModel } from '@shared/openrouter'
 
 
 interface StoredSettings {
@@ -104,6 +104,12 @@ function storedBaseUrl(raw: unknown): string {
   return raw.trim().replace(/\/$/, '')
 }
 
+/** Only allowlisted OpenRouter transcription models; anything else reverts to the default. */
+function supportedTranscriptionModel(raw: unknown): string {
+  return typeof raw === 'string' && isSupportedTranscriptionModel(raw.trim())
+    ? raw.trim() : DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL
+}
+
 function load(): StoredSettings {
   if (cache) return cache
   try {
@@ -117,6 +123,7 @@ function load(): StoredSettings {
         subscription: normalizeSubscription(parsed.subscription),
         openaiBaseUrl: storedBaseUrl(parsed.openaiBaseUrl),
         transcriptionBaseUrl: storedBaseUrl(parsed.transcriptionBaseUrl),
+        openRouterTranscriptionModel: supportedTranscriptionModel(parsed.openRouterTranscriptionModel),
         // Nested objects: merge so settings saved before new fields stay valid.
         sizeTargetMb: normalizeSizeTargetMb(parsed.sizeTargetMb),
         branding: {
@@ -288,7 +295,10 @@ export async function updateSettings(update: SettingsUpdate): Promise<AppSetting
   if (update.openRouterModel !== undefined && update.openRouterModel.trim()) {
     s.openRouterModel = update.openRouterModel.trim()
   }
-  if (update.openRouterTranscriptionModel !== undefined && update.openRouterTranscriptionModel.trim()) {
+  if (update.openRouterTranscriptionModel !== undefined) {
+    if (!isSupportedTranscriptionModel(update.openRouterTranscriptionModel.trim())) {
+      throw new Error(`${update.openRouterTranscriptionModel} can't be used for transcription: Cutawan needs word timestamps, which only OpenRouter's Whisper models return.`)
+    }
     s.openRouterTranscriptionModel = update.openRouterTranscriptionModel.trim()
   }
   if (update.openaiBaseUrl !== undefined) s.openaiBaseUrl = storedBaseUrl(update.openaiBaseUrl)

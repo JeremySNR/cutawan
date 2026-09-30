@@ -10,8 +10,8 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
 ### Added
 
-- **OpenRouter** is now a connection in first-run setup and Settings. Add an OpenRouter key (encrypted with your system keychain), then pick the clip-finding model from OpenRouter's full model list. The list is searchable, suggests models at the top, and shows prices, context size and image support. Transcription can use an OpenRouter-hosted Whisper model or local Whisper on your computer. **Check key** validates the key without making a model request.
-- If a hosted transcription model returns only segment timings, word timings are estimated so captions still work. A model that returns no timings at all fails with a message saying what to change.
+- **OpenRouter** is now a connection in first-run setup and Settings. Add an OpenRouter key (encrypted with your system keychain), then pick the clip-finding model from OpenRouter's full model list. The list is searchable, suggests models at the top, and shows prices, context size and image support. Transcription can use local Whisper on your computer or one of OpenRouter's Whisper models (Whisper, Whisper Large v3, Whisper Large v3 Turbo). These are the only OpenRouter transcription models that return the per-word timestamps captions need, so other transcription models aren't offered. **Check key** validates the key without making a model request.
+- OpenRouter transcription sends five-minute audio chunks so each request finishes inside OpenRouter's 60-second limit. A reply without word timestamps fails with a message saying what to change, rather than producing captions that can't be timed.
 
 ### Changed
 

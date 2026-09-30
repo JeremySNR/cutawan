@@ -234,6 +234,7 @@ export async function transcribeAudioFile(
   opts: TranscribeFileOptions = {}
 ): Promise<WhisperResponse> {
   if (usesLocalTranscription()) return transcribeLocally(filePath, opts)
+  if (openRouter) return transcribeWithOpenRouter(apiKey, filePath, model, opts)
   const bytes = await readFile(filePath)
   return withRetries(
     async () => {
@@ -248,43 +249,74 @@ export async function transcribeAudioFile(
 
       const res = await fetch(`${transcriptionApiBase()}/audio/transcriptions`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, ...providerHeaders() },
+        headers: { Authorization: `Bearer ${apiKey}` },
         body: form,
         signal: withTimeout(TRANSCRIBE_TIMEOUT_MS, opts.signal)
       })
       await raiseForStatus(res, 'Transcription')
-      return withWordTimings((await res.json()) as WhisperResponse, model)
+      return (await res.json()) as WhisperResponse
     },
     { signal: opts.signal }
   )
 }
 
 /**
- * Captions need word timings. Some hosted transcription models (reachable via
- * OpenRouter) return only segment timings: spread each segment's words across
- * it, weighted by length. With no timings at all, fail with a fix rather than
- * producing a transcript that cannot be captioned.
+ * OpenRouter's documented JSON form: base64 audio plus the fields its
+ * transcription schema lists. It has no top-level `prompt` (that is a
+ * per-provider option), so chunks are transcribed without the previous
+ * chunk's text; the overlap and seam repair still cover the joins.
  */
-export function withWordTimings(res: WhisperResponse, model: string): WhisperResponse {
+async function transcribeWithOpenRouter(
+  apiKey: string,
+  filePath: string,
+  model: string,
+  opts: TranscribeFileOptions
+): Promise<WhisperResponse> {
+  const body = JSON.stringify({
+    model,
+    input_audio: {
+      data: (await readFile(filePath)).toString('base64'),
+      format: filePath.toLowerCase().endsWith('.wav') ? 'wav' : 'mp3'
+    },
+    response_format: 'verbose_json',
+    timestamp_granularities: ['word', 'segment'],
+    ...(opts.language && opts.language !== 'auto' ? { language: opts.language } : {})
+  })
+  return withRetries(
+    async () => {
+      const res = await fetch(`${OPENROUTER_API_BASE}/audio/transcriptions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...providerHeaders() },
+        body,
+        signal: withTimeout(TRANSCRIBE_TIMEOUT_MS, opts.signal)
+      })
+      await raiseForStatus(res, 'Transcription')
+      return requireWordTimings((await res.json()) as WhisperResponse, model)
+    },
+    { signal: opts.signal }
+  )
+}
+
+/**
+ * Captions, cut tightening and clip timing need per-word timestamps. A reply
+ * with speech but no words (a provider that ignored the timestamp request)
+ * fails with a fix rather than producing a transcript that cannot be timed.
+ */
+export function requireWordTimings(res: WhisperResponse, model: string): WhisperResponse {
   if (res.words?.length || !res.text?.trim()) return res
-  const segments = res.segments?.filter(seg => seg.text.trim() && seg.end > seg.start) ?? []
-  if (!segments.length) {
-    throw new OpenAIError(
-      `The transcription model ${model} did not return timestamps. Choose a Whisper model or local transcription in Settings.`
-    )
-  }
-  const words: WhisperWord[] = []
-  for (const seg of segments) {
-    const tokens = seg.text.trim().split(/\s+/)
-    const total = tokens.reduce((sum, token) => sum + token.length, 0)
-    let at = seg.start
-    for (const token of tokens) {
-      const end = at + ((seg.end - seg.start) * token.length) / total
-      words.push({ word: token, start: at, end })
-      at = end
-    }
-  }
-  return { ...res, words }
+  throw new OpenAIError(
+    `${model} returned no word timestamps. Choose another Whisper model or local transcription in Settings.`
+  )
+}
+
+/**
+ * Audio chunk length for the active transcription route. OpenRouter stops
+ * waiting on its upstream after 60 seconds, so its chunks are short enough to
+ * transcribe well inside that; direct APIs keep the long default.
+ */
+export const OPENROUTER_AUDIO_CHUNK_SEC = 5 * 60
+export function transcriptionChunkSec(defaultSec: number): number {
+  return openRouter && !usesLocalTranscription() ? OPENROUTER_AUDIO_CHUNK_SEC : defaultSec
 }
 
 export type ChatContentPart =

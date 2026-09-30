@@ -4,7 +4,8 @@ import {
   parseOpenRouterModels,
   suggestedAsModels,
   SUGGESTED_OPENROUTER_MODELS,
-  SUGGESTED_OPENROUTER_TRANSCRIPTION_MODELS,
+  OPENROUTER_TRANSCRIPTION_MODELS,
+  isSupportedTranscriptionModel,
   type OpenRouterCatalog
 } from '@shared/openrouter'
 import { getOpenRouterKey } from './settings'
@@ -26,7 +27,8 @@ async function getJson(path: string, key?: string): Promise<{ status: number; bo
 
 /**
  * The public model catalogue (no key needed): chat models, and the
- * transcription models OpenRouter serves at /audio/transcriptions. Offline,
+ * transcription models OpenRouter serves at /audio/transcriptions that
+ * Cutawan can use (word timestamps required). Offline,
  * the suggested models stand in so setup still works.
  * `CUTAWAN_OPENROUTER_CATALOG` points at a saved `/models` response, for
  * headless checks without network access.
@@ -50,9 +52,12 @@ export async function listOpenRouterModels(refresh = false): Promise<OpenRouterC
       transcription = parseOpenRouterModels(speech.body, 'transcription')
     }
     if (!llm.length) throw new Error('OpenRouter returned no models')
+    // Only models that return word timestamps; see OPENROUTER_TRANSCRIPTION_MODELS.
+    // A short or failed transcription listing keeps the whole allowlist.
+    const supported = transcription.filter(m => isSupportedTranscriptionModel(m.id))
     const catalog: OpenRouterCatalog = {
       llm,
-      transcription: transcription.length ? transcription : suggestedAsModels(SUGGESTED_OPENROUTER_TRANSCRIPTION_MODELS),
+      transcription: supported.length ? supported : suggestedAsModels(OPENROUTER_TRANSCRIPTION_MODELS),
       live: true
     }
     cached = { at: Date.now(), catalog }
@@ -60,7 +65,7 @@ export async function listOpenRouterModels(refresh = false): Promise<OpenRouterC
   } catch (error) {
     return {
       llm: suggestedAsModels(SUGGESTED_OPENROUTER_MODELS),
-      transcription: suggestedAsModels(SUGGESTED_OPENROUTER_TRANSCRIPTION_MODELS),
+      transcription: suggestedAsModels(OPENROUTER_TRANSCRIPTION_MODELS),
       live: false,
       error: error instanceof Error ? error.message : String(error)
     }

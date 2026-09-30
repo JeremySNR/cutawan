@@ -32,9 +32,13 @@ function modelRow(model: OpenRouterModel, note?: string): Row {
 /**
  * Searchable dropdown over a model catalogue, with pinned choices (not
  * models) and suggested models above the full list. Typing a full model id
- * that is not listed offers it as a custom choice.
+ * that is not listed offers it as a custom choice, unless `allowCustom` is
+ * off (a closed list, such as the transcription models Cutawan supports).
  */
-export default function ModelPicker({ label, value, onChange, models, suggested, pinned = [], loading = false, testId }: {
+export default function ModelPicker({
+  label, value, onChange, models, suggested, pinned = [], loading = false, testId,
+  allowCustom = true, suggestedTitle = 'Suggested'
+}: {
   label: string
   value: string
   onChange: (id: string) => void
@@ -43,6 +47,8 @@ export default function ModelPicker({ label, value, onChange, models, suggested,
   pinned?: PinnedOption[]
   loading?: boolean
   testId?: string
+  allowCustom?: boolean
+  suggestedTitle?: string
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -62,15 +68,15 @@ export default function ModelPicker({ label, value, onChange, models, suggested,
       .filter(match)
     const suggestedIds = new Set(suggestedRows.map(r => r.id))
     const allRows = models.filter(m => !suggestedIds.has(m.id) && match(m)).map(m => modelRow(m))
-    const custom: Row[] = q && looksLikeModelId(q) && !byId.has(q) && !pinned.some(p => p.id === q)
+    const custom: Row[] = allowCustom && q && looksLikeModelId(q) && !byId.has(q) && !pinned.some(p => p.id === q)
       ? [{ id: q, name: `Use “${q}”`, detail: 'Custom model id', badges: [] }] : []
     return [
       { title: 'On this computer', rows: pinnedRows },
-      { title: 'Suggested', rows: suggestedRows },
+      { title: suggestedTitle, rows: suggestedRows },
       { title: q ? 'Matching models' : `${suggestedRows.length ? 'More models' : 'All models'} · ${allRows.length}`, rows: allRows },
       { title: 'Custom', rows: custom }
     ].filter(g => g.rows.length > 0)
-  }, [query, pinned, suggested, models, byId])
+  }, [query, pinned, suggested, models, byId, allowCustom, suggestedTitle])
   const flat = useMemo(() => groups.flatMap(g => g.rows), [groups])
 
   useEffect(() => {

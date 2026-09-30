@@ -51,11 +51,27 @@ export const SUGGESTED_OPENROUTER_MODELS: SuggestedModel[] = [
   { id: 'openai/gpt-5.5', name: 'OpenAI: GPT-5.5', note: 'Highest quality · slower and pricier' }
 ]
 
-export const SUGGESTED_OPENROUTER_TRANSCRIPTION_MODELS: SuggestedModel[] = [
-  { id: 'openai/whisper-1', name: 'OpenAI: Whisper', note: 'Recommended · word timestamps for captions' },
-  { id: 'openai/whisper-large-v3-turbo', name: 'OpenAI: Whisper Large v3 Turbo', note: 'Faster and cheaper' },
-  { id: 'openai/whisper-large-v3', name: 'OpenAI: Whisper Large v3', note: 'Most accurate Whisper' }
+/**
+ * The only OpenRouter transcription models Cutawan allows. Captions, cut
+ * tightening and clip timing need per-word timestamps, which means the
+ * request must use `response_format: "verbose_json"` with
+ * `timestamp_granularities: ["word", "segment"]`. Through OpenRouter that is
+ * reliably honoured only by the Whisper models, served by OpenAI-compatible
+ * upstreams (OpenAI, Groq, Together). Other listed models either reject
+ * verbose_json with HTTP 400 (e.g. openai/gpt-4o-transcribe,
+ * microsoft/mai-transcribe-1.5, Google Chirp), return no word timings, or
+ * limit input to short or PCM-only clips (AssemblyAI sync at 120 s, Meta
+ * Muse Voice WAV-only), which Cutawan's chunked MP3 uploads cannot meet.
+ */
+export const OPENROUTER_TRANSCRIPTION_MODELS: SuggestedModel[] = [
+  { id: 'openai/whisper-1', name: 'OpenAI: Whisper', note: 'Recommended · served by OpenAI' },
+  { id: 'openai/whisper-large-v3-turbo', name: 'OpenAI: Whisper Large v3 Turbo', note: 'Fastest and cheapest' },
+  { id: 'openai/whisper-large-v3', name: 'OpenAI: Whisper Large v3', note: 'Most accurate open Whisper' }
 ]
+
+export function isSupportedTranscriptionModel(id: string): boolean {
+  return OPENROUTER_TRANSCRIPTION_MODELS.some(m => m.id === id)
+}
 
 function perMillion(raw: unknown): number | null {
   const value = typeof raw === 'string' ? Number(raw) : typeof raw === 'number' ? raw : NaN
