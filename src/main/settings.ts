@@ -96,10 +96,7 @@ function applyEndpoints(s: StoredSettings): void {
     chatBase: s.openaiBaseUrl,
     transcriptionBase: s.transcriptionBaseUrl,
     openRouter: s.subscription.provider === 'openrouter',
-    credential: s.subscription.provider === 'chatgpt' ? undefined
-      : s.subscription.provider === 'openrouter'
-        ? decryptKey(s.openRouterKeyEncrypted) || process.env.OPENROUTER_API_KEY || ''
-        : decryptKey(s.apiKeyEncrypted) || process.env.OPENAI_API_KEY || ''
+    credential: getAnalysisCredential
   })
 }
 

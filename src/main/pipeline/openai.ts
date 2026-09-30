@@ -1,7 +1,6 @@
 import { usesSubscription, usesLocalTranscription, subscriptionJSON, transcribeLocally } from '../subscription'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { createHash } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { analysisRequests } from './mediaJobs'
 import { OPENROUTER_API_BASE } from '@shared/openrouter'
@@ -61,9 +60,7 @@ export function resolveOpenAiApiBase(
 let settingsChatBase: string | undefined
 let settingsTranscriptionBase: string | undefined
 let openRouter = false
-let routeCredentialHash: string | undefined
-
-const hashKey = (key: string): string => createHash('sha256').update(key).digest('hex')
+let routeCredential: (() => string) | undefined
 
 export function configureOpenAiEndpoints(opts: {
   chatBase?: string
@@ -75,21 +72,25 @@ export function configureOpenAiEndpoints(opts: {
    */
   openRouter?: boolean
   /**
-   * The credential the current route uses. Jobs read their key once at the
-   * start while the endpoint is read per request, so a provider switch during
-   * a job would otherwise send one vendor's key to the other's endpoint.
+   * Reads the credential the current route uses, at request time. Jobs read
+   * their key once at the start while the endpoint is read per request, so a
+   * provider switch during a job would otherwise send one vendor's key to the
+   * other's endpoint. Omitted (scripts, tests) means no check.
    */
-  credential?: string
+  credential?: () => string
 }): void {
   settingsChatBase = opts.chatBase?.trim() || undefined
   settingsTranscriptionBase = opts.transcriptionBase?.trim() || undefined
   openRouter = opts.openRouter === true
-  routeCredentialHash = opts.credential ? hashKey(opts.credential) : undefined
+  routeCredential = opts.credential
 }
 
-/** Refuse to send a key the current route did not issue (see `credential` above). */
+/**
+ * Refuse to send a key the current route did not issue (see `credential`
+ * above). A route with no key of its own matches no key.
+ */
 function assertKeyMatchesRoute(apiKey: string): void {
-  if (routeCredentialHash !== undefined && hashKey(apiKey) !== routeCredentialHash) {
+  if (routeCredential && apiKey !== routeCredential()) {
     throw new OpenAIError('The AI connection changed in Settings while this was running. Start it again.', 409)
   }
 }
