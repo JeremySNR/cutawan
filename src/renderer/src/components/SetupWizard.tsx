@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { DEFAULT_SUBSCRIPTION, type SubscriptionSettings } from '@shared/subscription'
 import { useStore } from '../store'
 import LocalWhisperSetup from './LocalWhisperSetup'
+import OpenRouterSetup, { type OpenRouterChoice } from './OpenRouterSetup'
+import { DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL } from '@shared/openrouter'
 
-type Route = 'api' | 'chatgpt' | 'local' | 'claude'
+type Route = 'api' | 'chatgpt' | 'local' | 'openrouter'
 const SETUP_ROUTE_KEY = 'cutawan.setupRoute.v1'
 
 export default function SetupWizard(): React.JSX.Element {
@@ -11,14 +13,20 @@ export default function SetupWizard(): React.JSX.Element {
   const saveSettings = useStore(s => s.saveSettings)
   const [route, setRoute] = useState<Route | null>(() => {
     const saved = window.localStorage.getItem(SETUP_ROUTE_KEY)
-    if (saved === 'api' || saved === 'chatgpt' || saved === 'local' || saved === 'claude') return saved
+    if (saved === 'api' || saved === 'chatgpt' || saved === 'local' || saved === 'openrouter') return saved
     if (settings?.subscription.provider === 'chatgpt') return 'chatgpt'
+    if (settings?.subscription.provider === 'openrouter') return 'openrouter'
     if (settings?.hasApiKey) return 'api'
     if (settings?.subscription.whisperModelPath) return 'local'
     return null
   })
   const [subscription, setSubscription] = useState<SubscriptionSettings>(settings?.subscription ?? DEFAULT_SUBSCRIPTION)
   const [apiKey, setApiKey] = useState('')
+  const [openRouter, setOpenRouter] = useState<OpenRouterChoice>({
+    apiKey: '',
+    model: settings?.openRouterModel ?? DEFAULT_OPENROUTER_MODEL,
+    transcriptionModel: settings?.openRouterTranscriptionModel ?? DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL
+  })
   const [verified, setVerified] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -70,6 +78,13 @@ export default function SetupWizard(): React.JSX.Element {
           ? { subscription: { ...subscription, provider: 'chatgpt' as const } }
           : route === 'local'
             ? { subscription: { ...subscription, provider: 'api' as const, localTranscription: true } }
+          : route === 'openrouter'
+            ? {
+                subscription: { ...subscription, provider: 'openrouter' as const },
+                openRouterModel: openRouter.model,
+                openRouterTranscriptionModel: openRouter.transcriptionModel,
+                ...(openRouter.apiKey.trim() ? { openRouterKey: openRouter.apiKey.trim() } : {})
+              }
           : { subscription: { ...subscription, provider: 'api' as const }, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
       })
       window.localStorage.removeItem(SETUP_ROUTE_KEY)
@@ -104,10 +119,10 @@ export default function SetupWizard(): React.JSX.Element {
           <span className="block text-sm font-semibold">Local captions only</span>
           <span className="mt-2 block text-xs leading-relaxed text-zinc-400">Transcribe and caption full videos without an AI service. Clip finding needs a connection later.</span>
         </button>
-        <button type="button" onClick={() => chooseRoute('claude')}
-          className={`rounded-xl border p-4 text-left ${route === 'claude' ? 'border-amber-500/60 bg-amber-500/10' : 'border-surface-600 bg-surface-900 hover:border-zinc-500'}`}>
-          <span className="block text-sm font-semibold">Claude subscription</span>
-          <span className="mt-2 block text-xs leading-relaxed text-zinc-400">Not available for Cutawan; see why below.</span>
+        <button type="button" onClick={() => chooseRoute('openrouter')} data-testid="setup-route-openrouter"
+          className={`rounded-xl border p-4 text-left ${route === 'openrouter' ? 'border-accent-400 bg-accent-400/10' : 'border-surface-600 bg-surface-900 hover:border-zinc-500'}`}>
+          <span className="block text-sm font-semibold">OpenRouter</span>
+          <span className="mt-2 block text-xs leading-relaxed text-zinc-400">One key for hundreds of models from OpenAI, Anthropic, Google and more. Pay as you go.</span>
         </button>
       </div>
 
@@ -188,19 +203,22 @@ export default function SetupWizard(): React.JSX.Element {
         {verified && <p className="text-xs text-emerald-400">Ready to caption videos locally.</p>}
       </div>}
 
-      {route === 'claude' && <div className="mt-5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 text-sm">
-        <h2 className="font-semibold">Claude subscriptions cannot be connected here</h2>
-        <p className="mt-2 text-xs leading-relaxed text-zinc-300">
-          Anthropic directs developers of third-party apps, including open-source apps, to use API-key authentication.
-          Claude’s web or desktop login is not an API credential, and Cutawan will not route its automated requests through a personal subscription.
-        </p>
-        <a href="https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account" target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs underline">Anthropic’s guidance ↗</a>
+      {route === 'openrouter' && <div className="mt-5 space-y-4 rounded-xl border border-surface-600 bg-surface-900 p-5">
+        <div>
+          <h2 className="text-base font-semibold">OpenRouter connection</h2>
+          <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+            Pick the model that finds your clips and how speech gets transcribed. You can change both later in Settings.
+          </p>
+        </div>
+        <OpenRouterSetup value={openRouter} onChange={patch => { setOpenRouter(current => ({ ...current, ...patch })); setMessage('') }}
+          subscription={subscription} onSubscriptionChange={updateSubscription} />
       </div>}
 
       {message && <p role="status" className="mt-4 text-xs text-zinc-300">{message}</p>}
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <button type="button" onClick={() => void finish(true)} disabled={busy} className="text-xs text-zinc-400 underline disabled:opacity-50">Explore without setup</button>
-        <button type="button" onClick={() => void finish()} disabled={busy || route === null || route === 'claude' || ((route === 'chatgpt' || route === 'local') && !verified) || (route === 'api' && !apiKey.trim() && !settings?.hasApiKey)}
+        <button type="button" onClick={() => void finish()} disabled={busy || route === null || ((route === 'chatgpt' || route === 'local') && !verified) || (route === 'api' && !apiKey.trim() && !settings?.hasApiKey)
+            || (route === 'openrouter' && !openRouter.apiKey.trim() && !settings?.hasOpenRouterKey)}
           className="rounded-xl bg-zinc-100 px-5 py-2.5 text-sm font-semibold text-zinc-900 disabled:opacity-40">Start using Cutawan</button>
       </div>
     </div>

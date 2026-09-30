@@ -25,7 +25,7 @@
 ## Download and get started
 
 1. **[Download the latest release](https://github.com/JeremySNR/cutawan/releases/latest).** Choose the Windows `.exe` installer, macOS `.dmg`, or Linux `.AppImage` under **Assets**. You do not need Node.js or a source checkout to use the app.
-2. **Set up your connection.** In v0.10.0 and newer, the first-run wizard offers **ChatGPT sign-in** via Codex for AI clip finding with local transcription, an **OpenAI-compatible API** for separately billed analysis, or **Local captions only** to caption a whole video without an AI connection. [Setup requirements and choices](docs/getting-started.md) are explained step by step. You can also explore the editor before setting up a connection.
+2. **Set up your connection.** In v0.10.0 and newer, the first-run wizard offers **ChatGPT sign-in** via Codex for AI clip finding with local transcription, an **OpenAI-compatible API** for separately billed analysis, **OpenRouter** for any model OpenRouter lists with one key, or **Local captions only** to caption a whole video without an AI connection. [Setup requirements and choices](docs/getting-started.md) are explained step by step. You can also explore the editor before setting up a connection.
 3. **Import a video or paste a supported URL.** Choose **Find viral clips** to review suggested moments, or **Caption whole video** to make one captioned edit. Adjust the trim, captions and framing, then export an MP4.
 
 The ChatGPT/Codex option is a beta integration with your plan's Codex allowance, not an included OpenAI API. It needs the Codex CLI signed in with ChatGPT and Python 3.10+; the wizard can install local faster-whisper and a speech model after you choose it. AI clip finding still needs either Codex or an API connection. Builds before v0.10.0 do not show the wizard; configure the connection in **Settings → General → AI connection** instead.
@@ -217,6 +217,7 @@ for analysis. Rendering, face tracking, zoom and export are local.
 Not as Cutawan's AI connection. [Anthropic's guidance](https://support.claude.com/en/articles/13189465-log-in-to-your-claude-account)
 directs developers of third-party apps, including open-source apps, to use API-key
 authentication. Cutawan will not route automated requests through a personal Claude login.
+You can use Claude models with an API key through the **OpenRouter** connection instead.
 
 **How is this different from Opus Clip's free tier?**
 Free SaaS tiers cap your processing minutes and usually watermark the output.
@@ -260,8 +261,10 @@ Signing and notarisation are wanted; see
 are configurable in Settings, including a cheaper legacy option.
 
 **Can I run it against a local or non-OpenAI model?**
-Yes, if it speaks the OpenAI REST shape. Set the API base URL in Settings
-(or `OPENAI_BASE_URL`) to Azure OpenAI, OpenRouter, Groq, LM Studio, Ollama,
+Yes. The **OpenRouter** connection takes one OpenRouter key and lets you pick
+any chat model it lists, plus a hosted Whisper model or local transcription.
+Your key is encrypted with the OS keychain. For anything else that speaks the OpenAI REST shape, set the API base URL in Settings
+(or `OPENAI_BASE_URL`) to Azure OpenAI, Groq, LM Studio, Ollama,
 or anything else with `/v1/chat/completions`. Transcription can point at a
 separate local Whisper server (faster-whisper, whisper.cpp’s compatible
 endpoint) — it must return **word-level timestamps**, because captions and

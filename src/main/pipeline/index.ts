@@ -29,7 +29,7 @@ import {
   YtDlpError,
   type CookieAuthOptions
 } from './ytdlp'
-import { getAnalysisCredential, getImportPreferences, getModelPreferences } from '../settings'
+import { getAnalysisCredential, getImportPreferences, getModelPreferences, missingCredentialName } from '../settings'
 import { projectDir, saveProject, updateProject } from '../projects'
 
 export async function createProject(videoPath: string): Promise<Project> {
@@ -142,7 +142,7 @@ export async function analyzeProject(
 ): Promise<Project> {
   const apiKey = getAnalysisCredential()
   if (!apiKey) {
-    throw new Error('No API key configured. Add one in Settings before generating clips.')
+    throw new Error(`No ${missingCredentialName()} configured. Add one in Settings before generating clips.`)
   }
   const settings = getModelPreferences()
   const generationId = randomUUID()

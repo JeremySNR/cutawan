@@ -306,7 +306,8 @@ function SetupPanel(): React.JSX.Element {
   // need a key; clip finding always does.
   const needsKey =
     settings !== null &&
-    !settings.hasApiKey && settings.subscription.provider !== 'chatgpt' &&
+    settings.subscription.provider !== 'chatgpt' &&
+    !(settings.subscription.provider === 'openrouter' ? settings.hasOpenRouterKey : settings.hasApiKey) &&
     !(mode === 'whole-video' && (project.transcript !== null || settings.subscription.localTranscription))
   const highlights = highlightClips(project)
 
@@ -545,7 +546,7 @@ function SetupPanel(): React.JSX.Element {
               onClick={() => setSettingsOpen(true)}
               className="flex items-center justify-center gap-2 rounded-xl bg-amber-500/15 px-5 py-3.5 text-sm font-semibold text-amber-400 transition hover:bg-amber-500/25"
             >
-              Add your OpenAI API key first
+              {settings?.subscription.provider === 'openrouter' ? 'Add your OpenRouter key first' : 'Add your OpenAI API key first'}
             </button>
           ) : (
             <div>

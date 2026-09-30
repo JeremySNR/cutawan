@@ -64,6 +64,30 @@ async function runSmokeCapture(win: BrowserWindow, dir: string): Promise<void> {
   await sleep(2500)
   if (process.env.CUTAWAN_SMOKE_WIZARD) {
     await shot('setup-wizard')
+    // OpenRouter route: key entry plus the searchable model pickers.
+    const reveal = (selector: string): Promise<void> => win.webContents.executeJavaScript(
+      `document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: 'start' })`
+    )
+    await click('[data-testid="setup-route-openrouter"]')
+    await reveal('[data-testid="openrouter-setup"]')
+    await shot('setup-openrouter')
+    await click('[data-testid="openrouter-model-toggle"]')
+    await reveal('[data-testid="openrouter-model"]')
+    await shot('setup-openrouter-models')
+    await win.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('[data-testid="openrouter-model-search"]')
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'claude')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    await sleep(400)
+    await shot('setup-openrouter-search')
+    await click('[data-testid="openrouter-model-toggle"]')
+    await click('[data-testid="openrouter-transcription-toggle"]')
+    await reveal('[data-testid="openrouter-transcription"]')
+    await shot('setup-openrouter-transcription')
+    await click('[data-testid="openrouter-transcription-option-local-whisper"]')
+    await reveal('[data-testid="openrouter-transcription"]')
+    await shot('setup-openrouter-local')
     app.quit()
     return
   }

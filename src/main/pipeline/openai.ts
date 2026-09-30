@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { analysisRequests } from './mediaJobs'
+import { OPENROUTER_API_BASE } from '@shared/openrouter'
 
 /**
  * Minimal OpenAI REST client using Node's built-in fetch, so the app has no
@@ -58,17 +59,45 @@ export function resolveOpenAiApiBase(
  */
 let settingsChatBase: string | undefined
 let settingsTranscriptionBase: string | undefined
+let openRouter = false
+let routeCredential: (() => string) | undefined
 
 export function configureOpenAiEndpoints(opts: {
   chatBase?: string
   transcriptionBase?: string
+  /**
+   * OpenRouter is its own provider: both chat and transcription go to
+   * openrouter.ai with the OpenRouter key, and the OpenAI base URL settings
+   * and env vars do not apply.
+   */
+  openRouter?: boolean
+  /**
+   * Reads the credential the current route uses, at request time. Jobs read
+   * their key once at the start while the endpoint is read per request, so a
+   * provider switch during a job would otherwise send one vendor's key to the
+   * other's endpoint. Omitted (scripts, tests) means no check.
+   */
+  credential?: () => string
 }): void {
   settingsChatBase = opts.chatBase?.trim() || undefined
   settingsTranscriptionBase = opts.transcriptionBase?.trim() || undefined
+  openRouter = opts.openRouter === true
+  routeCredential = opts.credential
+}
+
+/**
+ * Refuse to send a key the current route did not issue (see `credential`
+ * above). A route with no key of its own matches no key.
+ */
+function assertKeyMatchesRoute(apiKey: string): void {
+  if (routeCredential && apiKey !== routeCredential()) {
+    throw new OpenAIError('The AI connection changed in Settings while this was running. Start it again.', 409)
+  }
 }
 
 /** Chat completions base (analysis, captions, B-roll, visual scoring). */
 export function chatApiBase(): string {
+  if (openRouter) return OPENROUTER_API_BASE
   return resolveOpenAiApiBase(process.env.OPENAI_BASE_URL || settingsChatBase)
 }
 
@@ -78,12 +107,18 @@ export function chatApiBase(): string {
  * Whisper server can sit next to a hosted LLM.
  */
 export function transcriptionApiBase(): string {
+  if (openRouter) return OPENROUTER_API_BASE
   return resolveOpenAiApiBase(
     process.env.OPENAI_TRANSCRIPTION_BASE_URL ||
       process.env.OPENAI_BASE_URL ||
       settingsTranscriptionBase ||
       settingsChatBase
   )
+}
+
+/** OpenRouter's optional app attribution headers; nothing for other endpoints. */
+function providerHeaders(): Record<string, string> {
+  return openRouter ? { 'HTTP-Referer': 'https://github.com/JeremySNR/cutawan', 'X-Title': 'Cutawan' } : {}
 }
 
 export class OpenAIError extends Error {
@@ -218,6 +253,7 @@ export async function transcribeAudioFile(
   opts: TranscribeFileOptions = {}
 ): Promise<WhisperResponse> {
   if (usesLocalTranscription()) return transcribeLocally(filePath, opts)
+  if (openRouter) return transcribeWithOpenRouter(apiKey, filePath, model, opts)
   const bytes = await readFile(filePath)
   return withRetries(
     async () => {
@@ -230,6 +266,7 @@ export async function transcribeAudioFile(
       if (opts.contextPrompt) form.append('prompt', opts.contextPrompt)
       if (opts.language && opts.language !== 'auto') form.append('language', opts.language)
 
+      assertKeyMatchesRoute(apiKey)
       const res = await fetch(`${transcriptionApiBase()}/audio/transcriptions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -241,6 +278,69 @@ export async function transcribeAudioFile(
     },
     { signal: opts.signal }
   )
+}
+
+/**
+ * OpenRouter's documented JSON form: base64 audio plus the fields its
+ * transcription schema lists. It has no top-level `prompt` (that is a
+ * per-provider option), so chunks are transcribed without the previous
+ * chunk's text; the overlap and seam repair still cover the joins.
+ */
+async function transcribeWithOpenRouter(
+  apiKey: string,
+  filePath: string,
+  model: string,
+  opts: TranscribeFileOptions
+): Promise<WhisperResponse> {
+  const body = JSON.stringify({
+    model,
+    input_audio: {
+      data: (await readFile(filePath)).toString('base64'),
+      format: filePath.toLowerCase().endsWith('.wav') ? 'wav' : 'mp3'
+    },
+    response_format: 'verbose_json',
+    timestamp_granularities: ['word', 'segment'],
+    ...(opts.language && opts.language !== 'auto' ? { language: opts.language } : {})
+  })
+  const response = await withRetries(
+    async () => {
+      assertKeyMatchesRoute(apiKey)
+      const res = await fetch(`${OPENROUTER_API_BASE}/audio/transcriptions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...providerHeaders() },
+        body,
+        signal: withTimeout(TRANSCRIBE_TIMEOUT_MS, opts.signal)
+      })
+      await raiseForStatus(res, 'Transcription')
+      return (await res.json()) as WhisperResponse
+    },
+    { signal: opts.signal }
+  )
+  // Outside the retry loop: a model that ignores the timestamp request does
+  // so every time, and each retry would be billed.
+  return requireWordTimings(response, model)
+}
+
+/**
+ * Captions, cut tightening and clip timing need per-word timestamps. A reply
+ * with speech but no words (a provider that ignored the timestamp request)
+ * fails with a fix rather than producing a transcript that cannot be timed.
+ */
+export function requireWordTimings(res: WhisperResponse, model: string): WhisperResponse {
+  if (res.words?.length || !res.text?.trim()) return res
+  throw new OpenAIError(
+    `${model} returned no word timestamps. Choose another Whisper model or local transcription in Settings.`
+  )
+}
+
+/**
+ * Audio chunk length for the active transcription route. OpenRouter stops
+ * waiting on its upstream after 60 seconds, so its chunks are short enough to
+ * transcribe well inside that; direct APIs keep the long default.
+ */
+export const OPENROUTER_AUDIO_CHUNK_SEC = 5 * 60
+export function transcriptionChunkSec(defaultSec: number): number {
+  return openRouter && !usesLocalTranscription() ? OPENROUTER_AUDIO_CHUNK_SEC : defaultSec
 }
 
 export type ChatContentPart =
@@ -352,11 +452,13 @@ async function completeChatContent(
     const format = formats[i]
     const isLast = i === formats.length - 1
     try {
+      assertKeyMatchesRoute(apiKey)
       const res = await fetch(`${chatApiBase()}/chat/completions`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...providerHeaders()
         },
         body: JSON.stringify(format.body),
         signal: withTimeout(CHAT_TIMEOUT_MS, signal)

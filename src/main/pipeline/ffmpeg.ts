@@ -220,7 +220,8 @@ export interface AudioChunk {
  * so 20-minute chunks (~7.2 MB) leave plenty of headroom. Consecutive chunks
  * overlap by a few seconds so no word is cut in half at a boundary — Whisper
  * sees full context on both sides and the stitcher picks each word from the
- * chunk that owns its timestamp.
+ * chunk that owns its timestamp. Routes with a short request timeout pass a
+ * smaller `chunkSec`.
  */
 export const AUDIO_CHUNK_SEC = 20 * 60
 export const AUDIO_CHUNK_OVERLAP_SEC = 8
@@ -230,19 +231,20 @@ export async function extractAudioChunks(
   workDir: string,
   durationSec: number,
   onProgress?: (fraction: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  chunkSec = AUDIO_CHUNK_SEC
 ): Promise<AudioChunk[]> {
   await mkdir(workDir, { recursive: true })
-  const stride = AUDIO_CHUNK_SEC - AUDIO_CHUNK_OVERLAP_SEC
+  const stride = chunkSec - AUDIO_CHUNK_OVERLAP_SEC
   const count =
-    durationSec <= AUDIO_CHUNK_SEC ? 1 : 1 + Math.ceil((durationSec - AUDIO_CHUNK_SEC) / stride)
+    durationSec <= chunkSec ? 1 : 1 + Math.ceil((durationSec - chunkSec) / stride)
   const chunks: AudioChunk[] = []
   for (let i = 0; i < count; i++) {
     const offset = i * stride
     const out = join(workDir, `audio-${i}.mp3`)
     const args = [
       '-ss', String(offset),
-      '-t', String(AUDIO_CHUNK_SEC),
+      '-t', String(chunkSec),
       '-i', videoPath,
       '-vn',
       '-ac', '1',
@@ -250,7 +252,7 @@ export async function extractAudioChunks(
       '-b:a', '48k',
       out
     ]
-    const chunkDur = Math.min(AUDIO_CHUNK_SEC, durationSec - offset)
+    const chunkDur = Math.min(chunkSec, durationSec - offset)
     await runFfmpeg(args, {
       onProgress: (t) => onProgress?.(Math.min(1, (offset + Math.min(t, chunkDur)) / durationSec)),
       signal
@@ -260,7 +262,7 @@ export async function extractAudioChunks(
       offsetSec: offset,
       keepFromSec: i === 0 ? 0 : offset + AUDIO_CHUNK_OVERLAP_SEC / 2,
       keepToSec:
-        i === count - 1 ? Number.POSITIVE_INFINITY : offset + AUDIO_CHUNK_SEC - AUDIO_CHUNK_OVERLAP_SEC / 2
+        i === count - 1 ? Number.POSITIVE_INFINITY : offset + chunkSec - AUDIO_CHUNK_OVERLAP_SEC / 2
     })
   }
   onProgress?.(1)

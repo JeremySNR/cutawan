@@ -1,5 +1,6 @@
 import type { PipelineProgress, Project, Transcript } from '@shared/types'
-import { extractAudioChunks } from './ffmpeg'
+import { AUDIO_CHUNK_SEC, extractAudioChunks } from './ffmpeg'
+import { transcriptionChunkSec } from './openai'
 import { transcribeChunks } from './transcribe'
 import { annotateEnergy } from './energy'
 import { detectSpeech, vadAvailable } from './vad'
@@ -81,7 +82,8 @@ export async function ensureTranscript(
     project.video.durationSec,
     (f) =>
       onProgress({ stage: 'audio', progress: at(f * AUDIO_SHARE), message: 'Extracting audio…' }),
-    signal
+    signal,
+    transcriptionChunkSec(AUDIO_CHUNK_SEC)
   )
 
   onProgress({

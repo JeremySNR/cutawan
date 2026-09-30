@@ -36,6 +36,7 @@ export default function SubscriptionSettings({ value, onChange, onSave }: {
     <label className="block text-sm font-medium" htmlFor="analysis-provider">AI connection</label>
     <select id="analysis-provider" value={value.provider} onChange={e => update({ provider: e.target.value as Preferences['provider'] })} className={inputClass}>
       <option value="api">OpenAI-compatible API</option>
+      <option value="openrouter">OpenRouter</option>
       <option value="chatgpt">ChatGPT subscription via Codex (beta)</option>
     </select>
     {value.provider === 'api' && <>
