@@ -174,6 +174,31 @@ describe('OpenRouter transcription requests', () => {
     expect(body).not.toHaveProperty('language')
   })
 
+  it('does not retry (and re-bill) a reply without word timestamps', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cutawan-or-'))
+    const file = join(dir, 'audio-0.mp3')
+    await writeFile(file, Buffer.from('mp3'))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ language: 'en', duration: 2, text: 'hello world' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    configureOpenAiEndpoints({ openRouter: true })
+    await expect(transcribeAudioFile('k', file, 'openai/whisper-1')).rejects.toThrow(/no word timestamps/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to send a key from another route after a provider switch mid-job', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cutawan-or-'))
+    const file = join(dir, 'audio-0.mp3')
+    await writeFile(file, Buffer.from('mp3'))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(reply), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    // The job read the OpenAI key, then Settings switched to OpenRouter.
+    configureOpenAiEndpoints({ openRouter: true, credential: 'sk-or-current' })
+    await expect(transcribeAudioFile('sk-openai-old', file, 'openai/whisper-1')).rejects.toThrow(/connection changed/)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await transcribeAudioFile('sk-or-current', file, 'openai/whisper-1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('uses short chunks for OpenRouter to stay inside its 60 s upstream timeout', () => {
     expect(transcriptionChunkSec(1200)).toBe(1200)
     configureOpenAiEndpoints({ openRouter: true })

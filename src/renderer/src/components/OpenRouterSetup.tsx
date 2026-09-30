@@ -4,6 +4,7 @@ import type { SubscriptionSettings } from '@shared/subscription'
 import {
   OPENROUTER_KEYS_URL,
   SUGGESTED_OPENROUTER_MODELS,
+  suggestedAsModels,
   OPENROUTER_TRANSCRIPTION_MODELS,
   type OpenRouterCatalog
 } from '@shared/openrouter'
@@ -42,7 +43,16 @@ export default function OpenRouterSetup({ value, onChange, subscription, onSubsc
 
   useEffect(() => {
     let active = true
-    void window.cutawan.listOpenRouterModels().then(c => { if (active) setCatalog(c) })
+    window.cutawan.listOpenRouterModels()
+      .then(c => { if (active) setCatalog(c) })
+      .catch((error: unknown) => {
+        if (active) setCatalog({
+          llm: suggestedAsModels(SUGGESTED_OPENROUTER_MODELS),
+          transcription: suggestedAsModels(OPENROUTER_TRANSCRIPTION_MODELS),
+          live: false,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
     return () => { active = false }
   }, [])
 

@@ -39,6 +39,7 @@ import {
   getExportPreferences,
   getModelPreferences,
   getSettings,
+  missingCredentialName,
   updateSettings
 } from './settings'
 
@@ -333,7 +334,7 @@ export function registerIpcHandlers(): void {
     const clip = project.clips.find((c) => c.id === clipId)
     if (!clip) throw new Error('Clip not found')
     const apiKey = getAnalysisCredential()
-    if (!apiKey) throw new Error('Add your OpenAI API key in Settings first.')
+    if (!apiKey) throw new Error(`Add your ${missingCredentialName()} in Settings first.`)
     const caption = await generateSocialCaption(
       apiKey,
       getModelPreferences().analysisModel,

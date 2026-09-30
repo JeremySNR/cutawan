@@ -1,6 +1,7 @@
 import { usesSubscription, usesLocalTranscription, subscriptionJSON, transcribeLocally } from '../subscription'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
+import { createHash } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { analysisRequests } from './mediaJobs'
 import { OPENROUTER_API_BASE } from '@shared/openrouter'
@@ -60,6 +61,9 @@ export function resolveOpenAiApiBase(
 let settingsChatBase: string | undefined
 let settingsTranscriptionBase: string | undefined
 let openRouter = false
+let routeCredentialHash: string | undefined
+
+const hashKey = (key: string): string => createHash('sha256').update(key).digest('hex')
 
 export function configureOpenAiEndpoints(opts: {
   chatBase?: string
@@ -70,10 +74,24 @@ export function configureOpenAiEndpoints(opts: {
    * and env vars do not apply.
    */
   openRouter?: boolean
+  /**
+   * The credential the current route uses. Jobs read their key once at the
+   * start while the endpoint is read per request, so a provider switch during
+   * a job would otherwise send one vendor's key to the other's endpoint.
+   */
+  credential?: string
 }): void {
   settingsChatBase = opts.chatBase?.trim() || undefined
   settingsTranscriptionBase = opts.transcriptionBase?.trim() || undefined
   openRouter = opts.openRouter === true
+  routeCredentialHash = opts.credential ? hashKey(opts.credential) : undefined
+}
+
+/** Refuse to send a key the current route did not issue (see `credential` above). */
+function assertKeyMatchesRoute(apiKey: string): void {
+  if (routeCredentialHash !== undefined && hashKey(apiKey) !== routeCredentialHash) {
+    throw new OpenAIError('The AI connection changed in Settings while this was running. Start it again.', 409)
+  }
 }
 
 /** Chat completions base (analysis, captions, B-roll, visual scoring). */
@@ -247,6 +265,7 @@ export async function transcribeAudioFile(
       if (opts.contextPrompt) form.append('prompt', opts.contextPrompt)
       if (opts.language && opts.language !== 'auto') form.append('language', opts.language)
 
+      assertKeyMatchesRoute(apiKey)
       const res = await fetch(`${transcriptionApiBase()}/audio/transcriptions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -282,8 +301,9 @@ async function transcribeWithOpenRouter(
     timestamp_granularities: ['word', 'segment'],
     ...(opts.language && opts.language !== 'auto' ? { language: opts.language } : {})
   })
-  return withRetries(
+  const response = await withRetries(
     async () => {
+      assertKeyMatchesRoute(apiKey)
       const res = await fetch(`${OPENROUTER_API_BASE}/audio/transcriptions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...providerHeaders() },
@@ -291,10 +311,13 @@ async function transcribeWithOpenRouter(
         signal: withTimeout(TRANSCRIBE_TIMEOUT_MS, opts.signal)
       })
       await raiseForStatus(res, 'Transcription')
-      return requireWordTimings((await res.json()) as WhisperResponse, model)
+      return (await res.json()) as WhisperResponse
     },
     { signal: opts.signal }
   )
+  // Outside the retry loop: a model that ignores the timestamp request does
+  // so every time, and each retry would be billed.
+  return requireWordTimings(response, model)
 }
 
 /**
@@ -428,6 +451,7 @@ async function completeChatContent(
     const format = formats[i]
     const isLast = i === formats.length - 1
     try {
+      assertKeyMatchesRoute(apiKey)
       const res = await fetch(`${chatApiBase()}/chat/completions`, {
         method: 'POST',
         headers: {

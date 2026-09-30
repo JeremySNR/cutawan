@@ -95,7 +95,11 @@ function applyEndpoints(s: StoredSettings): void {
   configureOpenAiEndpoints({
     chatBase: s.openaiBaseUrl,
     transcriptionBase: s.transcriptionBaseUrl,
-    openRouter: s.subscription.provider === 'openrouter'
+    openRouter: s.subscription.provider === 'openrouter',
+    credential: s.subscription.provider === 'chatgpt' ? undefined
+      : s.subscription.provider === 'openrouter'
+        ? decryptKey(s.openRouterKeyEncrypted) || process.env.OPENROUTER_API_KEY || ''
+        : decryptKey(s.apiKeyEncrypted) || process.env.OPENAI_API_KEY || ''
   })
 }
 
@@ -184,6 +188,11 @@ export function getOpenRouterKey(): string {
 
 function maskKey(key: string): string {
   return key.length > 8 ? `${key.slice(0, 5)}…${key.slice(-4)}` : key ? '•••' : ''
+}
+
+/** What to ask for when the selected provider has no credential. */
+export function missingCredentialName(): string {
+  return load().subscription.provider === 'openrouter' ? 'OpenRouter key' : 'OpenAI API key'
 }
 
 /** Credential for analysis (and hosted transcription) on the selected provider. */

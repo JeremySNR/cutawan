@@ -52,7 +52,9 @@ export default function ModelPicker({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
+  // Tracked by id, not index, so rows arriving while the list is open (the
+  // catalogue loading) cannot move the highlight onto a different model.
+  const [activeId, setActiveId] = useState<string | null>(null)
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLDivElement>(null)
 
@@ -78,6 +80,8 @@ export default function ModelPicker({
     ].filter(g => g.rows.length > 0)
   }, [query, pinned, suggested, models, byId, allowCustom, suggestedTitle])
   const flat = useMemo(() => groups.flatMap(g => g.rows), [groups])
+  const active = Math.max(0, flat.findIndex(row => row.id === activeId))
+  const setActive = (index: number): void => setActiveId(flat[index]?.id ?? null)
 
   useEffect(() => {
     if (!open) return
@@ -100,11 +104,11 @@ export default function ModelPicker({
   const toggle = (): void => {
     setOpen(o => !o)
     setQuery('')
-    setActive(0)
+    setActiveId(null)
   }
   const onKey = (event: React.KeyboardEvent): void => {
-    if (event.key === 'ArrowDown') { event.preventDefault(); setActive(i => Math.min(flat.length - 1, i + 1)) }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(i => Math.max(0, i - 1)) }
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActive(Math.min(flat.length - 1, active + 1)) }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(Math.max(0, active - 1)) }
     else if (event.key === 'Enter') { event.preventDefault(); if (flat[active]) choose(flat[active].id) }
     else if (event.key === 'Escape') { event.preventDefault(); setOpen(false) }
   }
@@ -128,7 +132,7 @@ export default function ModelPicker({
     {open && <div className="mt-1 overflow-hidden rounded-xl border border-surface-600 bg-surface-900 shadow-xl shadow-black/50">
       <div className="flex items-center gap-2 border-b border-surface-700 px-3 py-2">
         <Search size={14} className="text-zinc-500" />
-        <input autoFocus value={query} onChange={e => { setQuery(e.target.value); setActive(0) }} onKeyDown={onKey}
+        <input autoFocus value={query} onChange={e => { setQuery(e.target.value); setActiveId(null) }} onKeyDown={onKey}
           placeholder="Search models by name or id…" aria-label={`Search ${label}`} data-testid={testId && `${testId}-search`}
           className="w-full bg-transparent text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none" />
       </div>
