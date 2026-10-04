@@ -15,6 +15,7 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
 ### Improved
 
+- Keyboard navigation now has a clear focus outline across controls. UI control transitions respect reduced motion without changing authored caption animation or video exports.
 - The setup wizard no longer shows the unavailable "Claude subscription" card. Claude models can be used through OpenRouter instead.
 
 ## [0.13.0] - 2026-09-25

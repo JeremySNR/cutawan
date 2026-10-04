@@ -85,3 +85,14 @@ jobs:
           name: smoke-screenshots
           path: .tmp/smoke/
           if-no-files-found: ignore
+
+
+  design-foundations:
+    name: shared design token export
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 design-system/build.py --output design-system/foundations.css --check
