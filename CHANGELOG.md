@@ -12,10 +12,15 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
 - **OpenRouter** is now a connection in first-run setup and Settings. Add an OpenRouter key (encrypted with your system keychain), then pick the clip-finding model from OpenRouter's full model list. The list is searchable, suggests models at the top, and shows prices, context size and image support. Transcription can use local Whisper on your computer or one of OpenRouter's Whisper models (Whisper, Whisper Large v3, Whisper Large v3 Turbo). These are the only OpenRouter transcription models that return the per-word timestamps captions need, so other transcription models aren't offered. **Check key** validates the key without making a model request.
 - OpenRouter transcription sends five-minute audio chunks so each request finishes inside OpenRouter's 60-second limit. A reply without word timestamps fails with a message saying what to change, rather than producing captions that can't be timed.
+- **Import Metachlorian package…** on the home screen opens a rough cut built in Metachlorian as a project: the interview becomes the video, its transcript is used for captions straight away (nothing to transcribe, no API calls), and the chosen B-roll is placed as video inserts. You can also drop the package's .zip onto the home screen.
+- B-roll inserts can now be video clips as well as images. They play muted over the speaker in the preview and in the export, can be switched between full screen and overlay or turned off like image inserts, and pause removal never cuts through the middle of one.
+- Imported packages show their rights verdict in a banner above the editor and the clip list. Anything other than "allowed" stays visible with its reasons, along with any credit lines the footage requires and when its licence expires.
+- Agents and scripts can run `cutawan --import-package "<folder or .zip>"`. If Cutawan is already open, it imports the package into the open window and brings it to the front instead of starting a second copy.
 
 ### Improved
 
 - The setup wizard no longer shows the unavailable "Claude subscription" card. Claude models can be used through OpenRouter instead.
+- Running **Caption whole video** again keeps the B-roll inserts already placed on the full-video edit.
 
 ## [0.13.0] - 2026-09-25
 

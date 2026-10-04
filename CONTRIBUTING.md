@@ -88,7 +88,7 @@ npx tsx --tsconfig tsconfig.node.json scripts/test-pipeline.ts   # offline
 ./scripts/smoke-test.sh .tmp/smoke                               # Xvfb, Linux
 ```
 
-`test-pipeline`, `test-quality`, `test-encoders`, `test-resilience`,
+`test-pipeline`, `test-handoff`, `test-quality`, `test-encoders`, `test-resilience`,
 `test-wholevideo`, `test-captionsize` and `test-uploadsize` run offline.
 `test-e2e`, `test-broll` and `test-youtube` need network or an API key. Each
 file's header says what it covers.

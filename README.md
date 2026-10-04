@@ -76,6 +76,7 @@ On the default API route, a typical estimate is **~$0.36/hour of video** for Whi
 **Finding the clips**
 
 - **Import anything.** Local files (MP4/MOV/MKV/WEBM and more) or paste a URL from YouTube, Vimeo, TikTok, Twitch, or any site yt-dlp supports. Private or SSO-protected videos (like enterprise Vimeo) work by borrowing the login from your browser. No server integration needed.
+- **Open Metachlorian rough cuts.** A [Metachlorian](docs/metachlorian-handoff.md) package (a selected interview plus B-roll, with transcript and rights) opens as a ready-to-edit project, with the B-roll as timed video inserts and the rights verdict on screen. Agents can do it in one command: `cutawan --import-package "<folder or .zip>"`.
 - **Whisper transcription** with word-level timestamps. Long videos are chunked automatically and checkpointed, so retries and re-generations never pay for transcription twice.
 - **Find visual moments (beta).** Opt in to sampled source-wide discovery before transcript selection, including demonstrations and visible events without speech. The app shows sampling gaps and failed coverage. [How it works and its limits](docs/source-discovery.md).
 - **Viral moment detection backed by research.** An LLM picks self-contained hook, build, payoff micro-stories (not clips that trail off mid-setup). You can steer it with your own prompt if you want, like "find the funniest exchanges". A second AI pass reviews every clip ending and extends it to the beat that actually completes the thought.
@@ -160,6 +161,7 @@ src/
 │   │   └── render.ts      cut, reframe, auto zoom, watermark, burn-in
 │   ├── updates.ts         GitHub release checks + self-update
 │   ├── fonts.ts           custom caption fonts (sfnt parsing, merged fontsdir)
+│   ├── handoff.ts         Metachlorian package import (+ handoffManifest.ts checks)
 │   ├── ipc.ts             typed IPC handlers
 │   ├── settings.ts        encrypted API key, models, branding
 │   └── projects.ts        project persistence (userData/projects)
@@ -180,7 +182,7 @@ npm run typecheck
 npm run lint
 ```
 
-Integration test scripts live in `scripts/` (`test-pipeline`, `test-e2e`, `test-quality`, `test-wholevideo`, `test-encoders`, `test-resilience`, `test-broll`, `test-youtube`, `test-asd`, `smoke-test.sh`). See each file's header for what it covers. The e2e ones need `OPENAI_API_KEY`.
+Integration test scripts live in `scripts/` (`test-pipeline`, `test-handoff`, `test-e2e`, `test-quality`, `test-wholevideo`, `test-encoders`, `test-resilience`, `test-broll`, `test-youtube`, `test-asd`, `smoke-test.sh`). See each file's header for what it covers. The e2e ones need `OPENAI_API_KEY`.
 
 To measure clip quality on your own projects, `scripts/eval-clips.ts` reads every saved project and reports how many clips open mid-sentence, cut a sentence off, or trail into dead air, plus the length spread. Add `--rerun` (needs `OPENAI_API_KEY`, a few cents per project, no transcription cost) to re-run clip detection on the saved transcripts with the current prompts and compare, which is how to check a prompt change actually helps:
 
