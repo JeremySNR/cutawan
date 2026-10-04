@@ -59,10 +59,11 @@ export type ClipContentType = 'speaker' | 'screencast'
 
 /**
  * How a clip came to exist: a moment the AI cut out of a longer video, or the
- * whole source video captioned straight through ("caption whole video" mode).
+ * whole source video captioned straight through ("caption whole video" mode),
+ * or a shot from an imported Metachlorian package (see docs/metachlorian-handoff.md).
  * Absent on projects saved before that mode existed; loadProject fills it in.
  */
-export type ClipOrigin = 'ai-highlight' | 'whole-video'
+export type ClipOrigin = 'ai-highlight' | 'whole-video' | 'package'
 
 /**
  * Which flow last ran on a project. Decides where reopening it lands: the
@@ -144,6 +145,9 @@ export interface ClipEditState {
 /** How a B-roll image is composited over the clip. */
 export type BrollMode = 'fullscreen' | 'overlay'
 
+/** What a B-roll insert shows: a still image, or a stretch of a video file. */
+export type BrollKind = 'image' | 'video'
+
 export interface BrollItem {
   id: string
   /** The spoken word/phrase that triggered this insert, e.g. "Yoda". */
@@ -154,7 +158,17 @@ export interface BrollItem {
   start: number
   end: number
   mode: BrollMode
-  /** Local path of the downloaded image; null if no image was found. */
+  /** Absent means 'image' (every insert saved before video inserts existed). */
+  kind?: BrollKind
+  /**
+   * Video inserts only: seconds into the media file where the insert starts.
+   * The insert plays from here for `end - start` seconds; absent means 0.
+   */
+  mediaIn?: number
+  /**
+   * Local path of the downloaded image, or of the video file for a video
+   * insert; null if no image was found.
+   */
   imagePath: string | null
   /** Where the image came from (page URL) for attribution. */
   sourceUrl: string
@@ -268,12 +282,46 @@ export interface Project {
   editorialRanking?: EditorialRankingReport
   /** Flow that last ran on this project; absent on clip-finding projects. */
   mode?: ProjectMode
+  /** Set when the project was imported from a Metachlorian handoff package. */
+  handoff?: ProjectHandoff
   /**
    * True when the source video no longer exists on disk (moved/deleted).
    * Transient — recomputed on load, never persisted.
    */
   sourceMissing?: boolean
 }
+
+/** Rights as Metachlorian decided them when it built the package. */
+export interface HandoffRights {
+  /** allowed | restricted | blocked | unknown. Anything but allowed is shown as a warning. */
+  verdict: string
+  /** Credit lines the included footage requires. */
+  credits: string[]
+  /** Earliest licence expiry across the included footage (YYYY-MM-DD). */
+  earliestExpiry?: string
+  /** Why the verdict is not allowed, one human-readable line each. */
+  reasons?: string[]
+}
+
+/** Where an imported project came from, kept for the rights banner and later migrations. */
+export interface ProjectHandoff {
+  packageId: string
+  schemaVersion: string
+  /** Base URL of the Metachlorian instance that built the package. */
+  instance?: string
+  rights: HandoffRights
+  /** Package name as Metachlorian recorded it. */
+  packageName?: string
+  importedAt?: number
+  /** Import notes worth keeping visible, e.g. a transcript Cutawan could not use. */
+  notes?: string[]
+}
+
+/** Status of a package import started from the command line; `importId` ties progress to its outcome. */
+export type HandoffEvent =
+  | { importId: number; state: 'importing'; progress: number; message: string }
+  | { importId: number; state: 'done'; projectId: string }
+  | { importId: number; state: 'failed'; message: string }
 
 export interface ProjectSummary {
   id: string

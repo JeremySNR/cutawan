@@ -32,6 +32,8 @@ import { UpdateActivity } from './updateActivity'
 import { isMediaPathAllowed } from './mediaAccess'
 import { sanitizeFileName, uniqueOutputPath } from './exportPath'
 import { deleteProject, listProjects, loadProject, updateProject } from './projects'
+import { importHandoffPackage } from './handoff'
+import { drainHandoffEvents } from './handoffLaunch'
 import {
   getAnalysisCredential,
   getBrandingSettings,
@@ -94,6 +96,32 @@ export function registerIpcHandlers(): void {
     })
     return result.canceled ? null : result.filePaths[0]
   })
+
+  handle('dialog:selectPackage', async (event) => {
+    // Headless/CI hook (like CUTAWAN_SELECT_VIDEO): skip the native dialog.
+    if (process.env.CUTAWAN_SELECT_PACKAGE) return process.env.CUTAWAN_SELECT_PACKAGE
+    const win = BrowserWindow.fromWebContents(event.sender)
+    // Windows and Linux cannot offer files and folders in one dialog, so the
+    // package is picked by its manifest.json (or as a .zip); macOS also
+    // accepts the folder itself.
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Import Metachlorian package',
+      buttonLabel: 'Import',
+      properties: process.platform === 'darwin' ? ['openFile', 'openDirectory'] : ['openFile'],
+      filters: [{ name: 'Metachlorian package (manifest.json or .zip)', extensions: ['json', 'zip'] }]
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+
+  handle('project:importPackage', async (event, packagePath: string) => {
+    return importHandoffPackage(packagePath, {
+      onProgress: (p) => {
+        if (!event.sender.isDestroyed()) event.sender.send('import:progress', p)
+      }
+    })
+  })
+
+  handle('handoff:drain', async () => drainHandoffEvents())
 
   handle('project:create', async (_e, videoPath: string) => {
     return createProject(videoPath)

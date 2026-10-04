@@ -416,7 +416,7 @@ function watermarkOverlayXY(position: WatermarkPosition, margin: number): string
 
 interface FilterGraph {
   filterComplex: string
-  /** Extra `-i` input args for the B-roll images (after the main input). */
+  /** Extra `-i` input args for the B-roll images and videos (after the main input). */
   extraInputs: string[]
   /** Label of the final audio stream, or null when the source has no audio. */
   audioLabel: string | null
@@ -429,7 +429,7 @@ interface FilterGraph {
 
 /**
  * Full filter graph: optional tighten trim+concat -> reframe -> timed B-roll
- * image overlays (fade in/out) -> branding watermark -> caption burn-in on
+ * image or video overlays (fade in/out) -> branding watermark -> caption burn-in on
  * top, plus the loudness-normalised audio chain with an end fade-out.
  * Exported for tests.
  */
@@ -509,7 +509,19 @@ export function buildFilterGraph(
     const input = i + 1
     const s = Math.max(0, item.start - clip.edit.start)
     const e = Math.min(clipDuration, item.end - clip.edit.start)
-    extraInputs.push('-loop', '1', '-t', clipDuration.toFixed(3), '-i', item.imagePath!)
+    // A still loops for the whole clip and the overlay's enable window picks
+    // the span. A video insert reads only the footage it shows, starting at
+    // mediaIn (plus any part the trim cut off its head), and is shifted onto
+    // the clip clock at s so the fades and the enable window line up. Its
+    // audio is never mapped: the A-roll keeps talking underneath.
+    let retime = ''
+    if (item.kind === 'video') {
+      const mediaIn = Math.max(0, item.mediaIn ?? 0) + Math.max(0, clip.edit.start - item.start)
+      extraInputs.push('-ss', mediaIn.toFixed(3), '-t', Math.max(0.05, e - s).toFixed(3), '-i', item.imagePath!)
+      retime = `setpts=PTS-STARTPTS+${s.toFixed(3)}/TB,`
+    } else {
+      extraInputs.push('-loop', '1', '-t', clipDuration.toFixed(3), '-i', item.imagePath!)
+    }
 
     const fades =
       `format=rgba,` +
@@ -518,7 +530,7 @@ export function buildFilterGraph(
 
     if (item.mode === 'fullscreen') {
       parts.push(
-        `[${input}:v]scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h},${fades}[b${i}]`
+        `[${input}:v]${retime}scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h},${fades}[b${i}]`
       )
       parts.push(
         `[${current}][b${i}]overlay=0:0:enable='between(t,${s.toFixed(3)},${e.toFixed(3)})':eof_action=pass[v${i}]`
@@ -527,7 +539,7 @@ export function buildFilterGraph(
       // Picture-in-picture panel over the speaker, upper-centre, white border.
       const panelW = Math.floor((w * 0.62) / 2) * 2
       parts.push(
-        `[${input}:v]scale=${panelW}:-2:flags=lanczos,pad=w=iw+16:h=ih+16:x=8:y=8:color=white,${fades}[b${i}]`
+        `[${input}:v]${retime}scale=${panelW}:-2:flags=lanczos,pad=w=iw+16:h=ih+16:x=8:y=8:color=white,${fades}[b${i}]`
       )
       parts.push(
         `[${current}][b${i}]overlay=(W-w)/2:${Math.round(h * 0.1)}:enable='between(t,${s.toFixed(3)},${e.toFixed(3)})':eof_action=pass[v${i}]`

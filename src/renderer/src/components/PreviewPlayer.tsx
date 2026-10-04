@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Play, Pause, RotateCcw } from 'lucide-react'
-import type { Clip, Project, WatermarkPosition } from '@shared/types'
+import type { BrollItem, Clip, Project, WatermarkPosition } from '@shared/types'
 import { hexToRgba, resolveCaptionStyle } from '@shared/captionStyles'
 import {
   captionLayoutBudget,
@@ -321,7 +321,7 @@ export default function PreviewPlayer({
           />
         </div>
         <canvas ref={overviewRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 hidden w-full" />
-        <BrollOverlay clip={clip} time={time} />
+        <BrollOverlay clip={clip} time={time} playing={playing} />
         <WatermarkOverlay />
         {clip.edit.captionsEnabled && project.transcript && (
           <CaptionOverlay
@@ -445,14 +445,23 @@ function HookOverlay({ clip }: { clip: Clip }): React.JSX.Element {
   )
 }
 
-function BrollOverlay({ clip, time }: { clip: Clip; time: number }): React.JSX.Element | null {
+function BrollOverlay({ clip, time, playing }: { clip: Clip; time: number; playing: boolean }): React.JSX.Element | null {
   const active = clip.broll.find(
     (b) => b.enabled && b.imagePath && time >= b.start && time <= b.end
   )
   if (!active) return null
   const src = window.cutawan.mediaUrl(active.imagePath!)
   if (active.mode === 'fullscreen') {
-    return (
+    return active.kind === 'video' ? (
+      <BrollVideo
+        key={active.id}
+        item={active}
+        src={src}
+        time={time}
+        playing={playing}
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+      />
+    ) : (
       <img
         src={src}
         alt={active.trigger}
@@ -465,13 +474,69 @@ function BrollOverlay({ clip, time }: { clip: Clip; time: number }): React.JSX.E
       className="pointer-events-none absolute inset-x-0 flex justify-center"
       style={{ top: '10cqh' }}
     >
-      <img
-        src={src}
-        alt={active.trigger}
-        className="border-4 border-white shadow-2xl"
-        style={{ width: '62%', height: 'auto' }}
-      />
+      {active.kind === 'video' ? (
+        <BrollVideo
+          key={active.id}
+          item={active}
+          src={src}
+          time={time}
+          playing={playing}
+          className="border-4 border-white shadow-2xl"
+          style={{ width: '62%', height: 'auto' }}
+        />
+      ) : (
+        <img
+          src={src}
+          alt={active.trigger}
+          className="border-4 border-white shadow-2xl"
+          style={{ width: '62%', height: 'auto' }}
+        />
+      )}
     </div>
+  )
+}
+
+/** Drift a playing insert may build up before it is re-seeked; seeking every tick stutters. */
+const BROLL_VIDEO_DRIFT_SEC = 0.25
+
+/**
+ * A video insert, muted (the A-roll keeps talking underneath, as in the
+ * export) and slaved to the preview clock: it shows the frame at
+ * mediaIn + (t - start), the same footage the export's -ss/setpts picks.
+ */
+function BrollVideo({ item, src, time, playing, className, style }: {
+  item: BrollItem
+  src: string
+  time: number
+  playing: boolean
+  className: string
+  style?: React.CSSProperties
+}): React.JSX.Element {
+  const ref = useRef<HTMLVideoElement>(null)
+  const target = (item.mediaIn ?? 0) + Math.max(0, time - item.start)
+  useEffect(() => {
+    const video = ref.current
+    if (!video) return
+    // Paused (scrubbing, stepping frames) must land exactly; playing only corrects drift.
+    if (Math.abs(video.currentTime - target) > (playing ? BROLL_VIDEO_DRIFT_SEC : 1 / 60)) video.currentTime = target
+  }, [target, playing])
+  useEffect(() => {
+    const video = ref.current
+    if (!video) return
+    if (playing) void video.play().catch(() => undefined)
+    else video.pause()
+  }, [playing])
+  return (
+    <video
+      ref={ref}
+      src={src}
+      muted
+      playsInline
+      preload="auto"
+      onLoadedMetadata={(e) => { e.currentTarget.currentTime = target }}
+      className={className}
+      style={style}
+    />
   )
 }
 

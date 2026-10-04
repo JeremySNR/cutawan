@@ -66,6 +66,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsx --tsconfig tsconfig.node.json scripts/test-pipeline.ts
+      - run: npx tsx --tsconfig tsconfig.node.json scripts/test-handoff.ts
 
   smoke:
     name: UI smoke test (Xvfb screenshots)

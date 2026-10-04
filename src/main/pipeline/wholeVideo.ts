@@ -127,7 +127,8 @@ export async function captionWholeVideo(
       reframeStatus: 'done',
       reframeAnalysis: { start: 0, end: project.video.durationSec, version: 1 },
       contentType,
-      broll: [],
+      // Inserts an imported package placed stay put across re-runs.
+      broll: existing?.broll ?? [],
       edit: wholeVideoEdit({
         aspect: options.aspect,
         autoZoom: options.autoZoom,

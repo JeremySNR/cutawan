@@ -8,6 +8,7 @@ import { initialWindowSize, MIN_WINDOW } from './windowSize'
 import { resolveUserDataPath } from './userData'
 import { stopInference } from './inference/client'
 import { validatePackage } from './packageValidation'
+import { importPackageArg, importPackageFromLaunch, type LaunchData } from './handoffLaunch'
 
 app.setName('Cutawan')
 app.setPath('userData', resolveUserDataPath(app.getPath('appData'), process.env.CUTAWAN_USER_DATA))
@@ -28,6 +29,16 @@ process.on('uncaughtException', (err) => {
 // database on case-insensitive filesystems and breaks the network service (see
 // cookies.ts). Must run synchronously at startup, not after app ready.
 migrateLegacyCookiesDir()
+
+// One Cutawan per profile. `cutawan --import-package <path>` from an agent
+// while the app is already open hands the path to the running app (see
+// 'second-instance' below) instead of starting a second copy. The path rides
+// along as additionalData too, because Chromium may reorder or rewrite a
+// second launch's argv. The packaged self-check runs alongside a normal app.
+const startupPackage = importPackageArg(process.argv, process.cwd())
+const isPrimaryInstance = Boolean(process.env.CUTAWAN_PACKAGE_CHECK) ||
+  app.requestSingleInstanceLock({ importPackage: startupPackage } satisfies LaunchData)
+if (!isPrimaryInstance) app.quit()
 
 function appIconPath(): string {
   return app.isPackaged
@@ -62,6 +73,22 @@ async function runSmokeCapture(win: BrowserWindow, dir: string): Promise<void> {
   }
 
   await sleep(2500)
+  if (process.env.CUTAWAN_SMOKE_PACKAGE) {
+    // Launched with --import-package: the import opens the editor by itself.
+    const ready = `Boolean(document.querySelector('[data-testid="whole-video-badge"]'))`
+    const deadline = Date.now() + 60000
+    while (!(await win.webContents.executeJavaScript(ready))) {
+      if (Date.now() > deadline) throw new Error('Smoke capture: the package import did not open the editor')
+      await sleep(250)
+    }
+    if (await win.webContents.executeJavaScript(`Boolean(document.querySelector('[data-testid="whats-new"]'))`)) {
+      await click('[data-testid="whats-new-close"]')
+    }
+    await sleep(1500)
+    await shot('package-import')
+    app.quit()
+    return
+  }
   if (process.env.CUTAWAN_SMOKE_WIZARD) {
     await shot('setup-wizard')
     // OpenRouter route: key entry plus the searchable model pickers.
@@ -279,7 +306,23 @@ function createWindow(): void {
   }
 }
 
+function focusMainWindow(): void {
+  const win = BrowserWindow.getAllWindows()[0]
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  if (!process.env.CUTAWAN_SMOKE) win.show()
+  win.focus()
+}
+
+app.on('second-instance', (_event, argv, workingDirectory, additionalData) => {
+  focusMainWindow()
+  const data = additionalData as Partial<LaunchData> | null
+  const path = data?.importPackage ?? importPackageArg(argv, workingDirectory)
+  if (path) void importPackageFromLaunch(path)
+})
+
 app.whenReady().then(() => {
+  if (!isPrimaryInstance) return
   if (process.env.CUTAWAN_PACKAGE_CHECK) {
     void validatePackage(process.env.CUTAWAN_PACKAGE_CHECK).then(() => app.quit()).catch(error => {
       console.error('Packaged validation failed:', error)
@@ -307,6 +350,9 @@ app.whenReady().then(() => {
   registerIpcHandlers()
   applyAppIcon()
   createWindow()
+  // The import runs in main while the window loads; the renderer picks up
+  // the result (queued if it is not listening yet) and opens the project.
+  if (startupPackage) void importPackageFromLaunch(startupPackage)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

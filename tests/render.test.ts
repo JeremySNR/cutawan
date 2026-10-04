@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { buildFilterGraph, speechSafeFade } from '../src/main/pipeline/render'
 import { makeTranscript } from './helpers'
 import { DEFAULT_BRAND_COLORS, DEFAULT_CAPTION_STYLE_ID } from '@shared/captionStyles'
-import type { BrandingSettings, Clip, VideoInfo } from '@shared/types'
+import type { BrandingSettings, BrollItem, Clip, VideoInfo } from '@shared/types'
+import { resolve } from 'node:path'
 
 function makeClip(start = 0, end = 30): Clip {
   return {
@@ -55,6 +56,39 @@ const branding: BrandingSettings = {
 }
 
 describe('buildFilterGraph', () => {
+  // Real files: the graph skips inserts whose media has gone missing.
+  const insertVideo = resolve(__dirname, 'fixtures/metachlorian-package/media/it_02.mp4')
+  const insertImage = __filename
+  const insert = (patch: Partial<BrollItem>): BrollItem => ({
+    id: 'b1', trigger: 'tools', query: '', start: 12, end: 15.5, mode: 'fullscreen',
+    imagePath: insertImage, sourceUrl: '', enabled: true, ...patch
+  })
+
+  it('reads a video insert from mediaIn for its own length and shifts it onto the clip clock', () => {
+    const clip = makeClip(10, 40)
+    clip.broll = [insert({ kind: 'video', mediaIn: 1.25, imagePath: insertVideo })]
+    const graph = buildFilterGraph(clip, source, null, 30, null)
+    expect(graph.extraInputs).toEqual(['-ss', '1.250', '-t', '3.500', '-i', insertVideo])
+    expect(graph.filterComplex).toContain('[1:v]setpts=PTS-STARTPTS+2.000/TB,scale=1080:1920')
+    expect(graph.filterComplex).toContain("enable='between(t,2.000,5.500)'")
+    // Insert audio is never used: the A-roll's audio chain is the only one.
+    expect(graph.filterComplex).not.toContain('[1:a]')
+  })
+
+  it('starts a video insert later in its media when the trim cuts off its head', () => {
+    const clip = makeClip(13, 40)
+    clip.broll = [insert({ kind: 'video', mediaIn: 1, imagePath: insertVideo })]
+    expect(buildFilterGraph(clip, source, null, 27, null).extraInputs.slice(0, 4)).toEqual(['-ss', '2.000', '-t', '2.500'])
+  })
+
+  it('keeps image inserts on the looped still path', () => {
+    const clip = makeClip(10, 40)
+    clip.broll = [insert({}), insert({ id: 'b2', kind: 'image', mode: 'overlay', start: 20, end: 22 })]
+    const graph = buildFilterGraph(clip, source, null, 30, null)
+    expect(graph.extraInputs).toEqual(['-loop', '1', '-t', '30.000', '-i', insertImage, '-loop', '1', '-t', '30.000', '-i', insertImage])
+    expect(graph.filterComplex).not.toContain('setpts=PTS-STARTPTS+')
+  })
+
   it('fits only protected shots in source-relative time and lets manual framing override', () => {
     const clip = makeClip(100, 130)
     clip.edit.framing = 'auto'

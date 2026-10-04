@@ -1,0 +1,312 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "metachlorian.package",
+  "package_id": "01JA7Z3K8V5R2Q9W4M6T1X0B3C",
+  "name": "Remote work explainer - rough cut",
+  "created_at": "2026-10-04T10:15:00Z",
+  "generator": {
+    "name": "metachlorian",
+    "version": "0.1.0",
+    "instance": "https://media.example.org"
+  },
+  "brief": {
+    "text": "Fixture: founder soundbite covered with one B-roll insert. Organic social, GB."
+  },
+  "target": {
+    "consumer": "cutawan",
+    "aspect": "9:16",
+    "duration_sec": 6,
+    "usage": [
+      "marketing"
+    ],
+    "channels": [
+      "organic_social"
+    ],
+    "territories": [
+      "GB"
+    ]
+  },
+  "vocab_versions": {
+    "shot_role": "1.0.0",
+    "shot_size": "1.0.0"
+  },
+  "media_policy": "stringout",
+  "assets": [
+    {
+      "asset_id": "a_interview_01",
+      "name": "Founder interview A-cam",
+      "duration": 1834.2,
+      "rate": "25/1",
+      "width": 192,
+      "height": 108,
+      "has_audio": true,
+      "language": "en-GB",
+      "edit_type": "raw",
+      "source_type": "own_production"
+    },
+    {
+      "asset_id": "a_office_gv",
+      "name": "Office GVs day 2",
+      "duration": 412.0,
+      "rate": "25/1",
+      "width": 192,
+      "height": 108,
+      "has_audio": true,
+      "edit_type": "raw",
+      "source_type": "stock"
+    }
+  ],
+  "media": [
+    {
+      "file": "media/stringout_a_roll.mp4",
+      "kind": "stringout",
+      "duration": 6.0,
+      "rate": "25/1",
+      "width": 192,
+      "height": 108,
+      "video_codec": "h264",
+      "audio_codec": "aac",
+      "has_audio": true,
+      "sha256": "21fa887f3b2c24f5f676943380aa9cc0474cca73255ed8853e3bbe23134a1f95",
+      "bytes": 60928
+    },
+    {
+      "file": "media/it_02.mp4",
+      "kind": "proxy",
+      "asset_id": "a_office_gv",
+      "asset_offset": 120.0,
+      "duration": 3.0,
+      "rate": "25/1",
+      "width": 192,
+      "height": 108,
+      "video_codec": "h264",
+      "audio_codec": "aac",
+      "has_audio": true,
+      "sha256": "f92db4f40af8db3e8818232340af28670904401cbb763727431ac827bc627607",
+      "bytes": 5876
+    }
+  ],
+  "items": [
+    {
+      "item_id": "it_01",
+      "shot_id": "s_8812",
+      "asset_id": "a_interview_01",
+      "role": "interview",
+      "source_range": {
+        "in": {
+          "seconds": 612.4,
+          "rate": "25/1",
+          "frames": 15310,
+          "timecode": "10:10:12:10"
+        },
+        "out": {
+          "seconds": 618.4,
+          "rate": "25/1"
+        }
+      },
+      "media": {
+        "file": "media/stringout_a_roll.mp4",
+        "in": 0.0,
+        "out": 6.0
+      },
+      "description": "Founder, MCU, says remote work is about trust not tools.",
+      "tags": {
+        "shot_size": [
+          "medium_close_up"
+        ],
+        "shot_role": [
+          "interview"
+        ]
+      },
+      "transcript_excerpt": {
+        "text": "Remote work was never about the tools. It is about trust, and trust is built in small daily habits.",
+        "language": "en-GB"
+      },
+      "safe_crops": {
+        "9:16": {
+          "rect": {
+            "x": 0.34,
+            "y": 0.0,
+            "width": 0.316,
+            "height": 1.0
+          },
+          "track": [
+            {
+              "t": 612.4,
+              "x": 0.5
+            },
+            {
+              "t": 615.0,
+              "x": 0.55
+            }
+          ]
+        }
+      },
+      "rights_ref": "r_it_01"
+    },
+    {
+      "item_id": "it_02",
+      "shot_id": "s_9001",
+      "asset_id": "a_office_gv",
+      "role": "b_roll",
+      "source_range": {
+        "in": {
+          "seconds": 121.0
+        },
+        "out": {
+          "seconds": 122.5
+        }
+      },
+      "handles_sec": 1.0,
+      "media": {
+        "file": "media/it_02.mp4",
+        "in": 1.0,
+        "out": 2.5
+      },
+      "description": "Close-up of hands typing on a laptop, slow push-in, soft window light.",
+      "tags": {
+        "shot_size": [
+          "close_up"
+        ],
+        "shot_role": [
+          "b_roll"
+        ]
+      },
+      "rights_ref": "r_it_02",
+      "web_url": "https://media.example.org/shots/s_9001"
+    }
+  ],
+  "sequences": [
+    {
+      "sequence_id": "seq_main",
+      "name": "Rough cut v1",
+      "rate": "25/1",
+      "width": 192,
+      "height": 108,
+      "duration": 6.0,
+      "tracks": [
+        {
+          "name": "V1",
+          "kind": "video",
+          "role": "a_roll",
+          "clips": [
+            {
+              "item_id": "it_01",
+              "record_in": 0.0,
+              "duration": 6.0
+            }
+          ]
+        },
+        {
+          "name": "V2",
+          "kind": "video",
+          "role": "b_roll",
+          "clips": [
+            {
+              "item_id": "it_02",
+              "record_in": 2.0,
+              "duration": 1.5
+            }
+          ]
+        },
+        {
+          "name": "A1",
+          "kind": "audio",
+          "role": "a_roll",
+          "clips": [
+            {
+              "item_id": "it_01",
+              "record_in": 0.0,
+              "duration": 6.0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "stringout": {
+    "sequence_id": "seq_main",
+    "file": "media/stringout_a_roll.mp4",
+    "scope": "a_roll",
+    "transcript": "transcripts/stringout_a_roll.json",
+    "map": [
+      {
+        "item_id": "it_01",
+        "in": 0.0,
+        "out": 6.0
+      }
+    ]
+  },
+  "transcripts": [
+    {
+      "file": "transcripts/stringout_a_roll.json",
+      "format": "cutawan.transcript/1",
+      "language": "en-GB",
+      "time_base": "media",
+      "media_file": "media/stringout_a_roll.mp4"
+    }
+  ],
+  "rights": {
+    "verdict": "allowed",
+    "intended": {
+      "usage": [
+        "marketing"
+      ],
+      "channels": [
+        "organic_social"
+      ],
+      "territories": [
+        "GB"
+      ],
+      "start": "2026-10-04",
+      "end": "2027-10-03"
+    },
+    "counts": {
+      "allowed": 2,
+      "restricted": 0,
+      "blocked": 0,
+      "unknown": 0
+    },
+    "checked_at": "2026-10-04T10:14:58Z",
+    "credits": [
+      "Footage: Example Stock Ltd"
+    ],
+    "earliest_expiry": "2027-12-31",
+    "records": {
+      "r_it_01": {
+        "verdict": "allowed",
+        "model_release": "unlimited",
+        "licence": {
+          "name": "Own production"
+        }
+      },
+      "r_it_02": {
+        "verdict": "allowed",
+        "licence": {
+          "name": "Example Stock standard licence"
+        },
+        "credit": "Footage: Example Stock Ltd",
+        "expires_at": "2027-12-31"
+      }
+    },
+    "human_readable": "RIGHTS.md"
+  },
+  "cutawan": {
+    "mode": "a_roll_with_inserts",
+    "project_name": "Remote work explainer",
+    "flow": "whole-video",
+    "video_type": "talking-head",
+    "aspect": "9:16",
+    "captions": true,
+    "auto_zoom": true,
+    "inserts": [
+      {
+        "item_id": "it_02",
+        "start": 2.0,
+        "end": 3.5,
+        "mode": "fullscreen",
+        "trigger": "tools"
+      }
+    ]
+  }
+}

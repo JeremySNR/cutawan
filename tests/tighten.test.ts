@@ -1,6 +1,39 @@
 import { describe, expect, it } from 'vitest'
-import { computeKeptSegments, remapTranscript, TimeMap } from '@shared/tighten'
+import { clipKeptSegments, computeKeptSegments, remapTranscript, TimeMap } from '@shared/tighten'
+import type { BrollItem, Clip } from '@shared/types'
 import { makeTranscript } from './helpers'
+
+describe('video B-roll inserts and pause removal', () => {
+  // Two sentences with a 3 s pause between them: tighten removes most of it.
+  const transcript = makeTranscript(['first thought ends here', 'second thought starts'], { sentenceGapSec: 3 })
+  const pauseStart = transcript.segments[0].end
+  const pauseEnd = transcript.segments[1].start
+  const insert = (kind: BrollItem['kind'], enabled = true): BrollItem => ({
+    id: 'b', trigger: 'pause', query: '', start: pauseStart - 0.5, end: pauseEnd + 0.5, mode: 'fullscreen',
+    kind, mediaIn: 1, imagePath: '/tmp/insert.mp4', sourceUrl: '', enabled
+  })
+  const clipWith = (broll: BrollItem[]): Pick<Clip, 'edit' | 'visualStory' | 'broll'> => ({
+    broll,
+    edit: {
+      aspect: '9:16', reframeMode: 'crop', framing: 'manual', tightenCuts: true, focusX: 0.5,
+      captionsEnabled: true, captionStyleId: 'beast', showTitle: false, start: 0, end: transcript.durationSec
+    }
+  })
+  const covers = (segments: Array<{ start: number; end: number }> | null, from: number, to: number): boolean =>
+    segments === null || segments.some(s => s.start <= from + 1e-6 && s.end >= to - 1e-6)
+
+  it('keeps a video insert continuous instead of cutting the pause under it', () => {
+    expect(covers(clipKeptSegments(clipWith([]), transcript), pauseStart, pauseEnd)).toBe(false)
+    expect(covers(clipKeptSegments(clipWith([insert('video')]), transcript), pauseStart - 0.5, pauseEnd + 0.5)).toBe(true)
+  })
+
+  it('leaves image inserts and disabled video inserts to pause removal as before', () => {
+    const plain = clipKeptSegments(clipWith([]), transcript)
+    expect(clipKeptSegments(clipWith([insert('image')]), transcript)).toEqual(plain)
+    expect(clipKeptSegments(clipWith([insert(undefined)]), transcript)).toEqual(plain)
+    expect(clipKeptSegments(clipWith([insert('video', false)]), transcript)).toEqual(plain)
+  })
+})
 
 describe('computeKeptSegments', () => {
   it.each(['', 'um', 'different caption'])('caption edit %j cannot change speech cuts', (text) => {

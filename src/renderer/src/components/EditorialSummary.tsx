@@ -12,6 +12,12 @@ export function EditorialScore({ clip, current, size = 'sm' }: {
   current: boolean
   size?: 'sm' | 'lg'
 }): React.JSX.Element {
+  // Shots from a Metachlorian package were chosen there, not scored here.
+  if (!clip.editorial && clip.origin === 'package') {
+    return <span className="shrink-0 rounded-full border border-white/[0.08] bg-black/75 px-2.5 py-1 text-[11px] font-medium text-zinc-300">
+      From package
+    </span>
+  }
   if (!clip.editorial) return <ScoreBadge score={clip.viralityScore} size={size} />
   if (current && clip.editorial.status === 'reviewed' && clip.editorial.score !== null) {
     return <ScoreBadge score={clip.editorial.score} kind="editorial" size={size} />
@@ -27,6 +33,12 @@ export function EditorialExplanation({ clip, current, compact = false }: {
   compact?: boolean
 }): React.JSX.Element {
   const assessment = clip.editorial
+  if (!assessment && clip.origin === 'package') {
+    return <p className={`${compact ? 'mt-2 line-clamp-2' : 'rounded-xl border border-surface-700 bg-surface-850 px-3.5 py-3'} text-xs leading-relaxed text-zinc-400`}>
+      <span className="font-medium text-zinc-300">Selected in Metachlorian. </span>
+      {compact ? 'Not scored by Cutawan.' : 'This shot came from an imported package, so Cutawan has not scored it.'}
+    </p>
+  }
   if (!assessment) {
     return <p className={`${compact ? 'mt-2 line-clamp-2' : 'rounded-xl border border-surface-700 bg-surface-850 px-3.5 py-3'} text-xs leading-relaxed text-zinc-400`}>
       <span className="font-medium text-zinc-300">Earlier AI assessment: </span>

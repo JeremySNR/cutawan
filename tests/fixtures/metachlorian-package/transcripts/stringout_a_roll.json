@@ -1,0 +1,123 @@
+{
+ "language": "en-GB",
+ "durationSec": 6.0,
+ "segments": [
+  {
+   "id": 0,
+   "text": "Remote work was never about the tools.",
+   "start": 0.3,
+   "end": 2.14,
+   "words": [
+    {
+     "text": "Remote",
+     "start": 0.3,
+     "end": 0.52
+    },
+    {
+     "text": "work",
+     "start": 0.57,
+     "end": 0.79
+    },
+    {
+     "text": "was",
+     "start": 0.84,
+     "end": 1.06
+    },
+    {
+     "text": "never",
+     "start": 1.11,
+     "end": 1.33
+    },
+    {
+     "text": "about",
+     "start": 1.38,
+     "end": 1.6
+    },
+    {
+     "text": "the",
+     "start": 1.65,
+     "end": 1.87
+    },
+    {
+     "text": "tools.",
+     "start": 1.92,
+     "end": 2.14
+    }
+   ]
+  },
+  {
+   "id": 1,
+   "text": "It is about trust, and trust is built in small daily habits.",
+   "start": 2.19,
+   "end": 5.38,
+   "words": [
+    {
+     "text": "It",
+     "start": 2.19,
+     "end": 2.41
+    },
+    {
+     "text": "is",
+     "start": 2.46,
+     "end": 2.68
+    },
+    {
+     "text": "about",
+     "start": 2.73,
+     "end": 2.95
+    },
+    {
+     "text": "trust,",
+     "start": 3.0,
+     "end": 3.22
+    },
+    {
+     "text": "and",
+     "start": 3.27,
+     "end": 3.49
+    },
+    {
+     "text": "trust",
+     "start": 3.54,
+     "end": 3.76
+    },
+    {
+     "text": "is",
+     "start": 3.81,
+     "end": 4.03
+    },
+    {
+     "text": "built",
+     "start": 4.08,
+     "end": 4.3
+    },
+    {
+     "text": "in",
+     "start": 4.35,
+     "end": 4.57
+    },
+    {
+     "text": "small",
+     "start": 4.62,
+     "end": 4.84
+    },
+    {
+     "text": "daily",
+     "start": 4.89,
+     "end": 5.11
+    },
+    {
+     "text": "habits.",
+     "start": 5.16,
+     "end": 5.38
+    }
+   ]
+  }
+ ],
+ "speech": [
+  {
+   "start": 0.25,
+   "end": 5.43
+  }
+ ]
+}

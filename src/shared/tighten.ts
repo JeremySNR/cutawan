@@ -1,4 +1,4 @@
-import type { Clip, SpeechRegion, TimeRange, Transcript } from './types'
+import type { BrollItem, Clip, SpeechRegion, TimeRange, Transcript } from './types'
 
 /**
  * "Tighten cuts": compute which sub-segments of a clip to keep so that long
@@ -13,8 +13,24 @@ export interface KeptSegment {
   end: number
 }
 
+/** The parts of a clip that decide what plays. `broll` is optional for callers that predate video inserts. */
+export type TightenClip = Pick<Clip, 'edit' | 'visualStory'> & { broll?: BrollItem[] }
+
+/**
+ * Source ranges automatic pause removal must leave whole: visual payoffs the
+ * story review kept, and every enabled video B-roll insert. Removing a pause
+ * inside a video insert would jump its footage forward mid-shot (the preview
+ * seeks the insert by source time), so the insert's span stays continuous.
+ */
+export function tightenProtectedRanges(clip: TightenClip): TimeRange[] {
+  const videoInserts = (clip.broll ?? [])
+    .filter(b => b.enabled && b.kind === 'video' && b.imagePath !== null)
+    .map(b => ({ start: b.start, end: b.end }))
+  return [...(clip.visualStory?.protectedRanges ?? []), ...videoInserts]
+}
+
 /** Actual playback length, after pause removal and the user's cuts. */
-export function editedClipDuration(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): number {
+export function editedClipDuration(clip: TightenClip, transcript: Transcript | null): number {
   const kept = clipKeptSegments(clip, transcript)
   return kept ? kept.reduce((sum, range) => sum + range.end - range.start, 0) : clip.edit.end - clip.edit.start
 }
@@ -54,10 +70,10 @@ export function subtractRanges(ranges: TimeRange[], remove: TimeRange[]): TimeRa
  * the whole trim plays untouched. Export, preview, durations and the AI's
  * view of the edit all go through here.
  */
-export function clipKeptSegments(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): KeptSegment[] | null {
+export function clipKeptSegments(clip: TightenClip, transcript: Transcript | null): KeptSegment[] | null {
   const { start, end } = clip.edit
   const auto = clip.edit.tightenCuts && transcript
-    ? computeKeptSegments(transcript, start, end, clip.visualStory?.protectedRanges)
+    ? computeKeptSegments(transcript, start, end, tightenProtectedRanges(clip))
     : null
   const cuts = normalizeRanges(clip.edit.cuts, start, end)
   const restored = auto ? normalizeRanges(clip.edit.restored, start, end) : []
@@ -69,9 +85,9 @@ export function clipKeptSegments(clip: Pick<Clip, 'edit' | 'visualStory'>, trans
 }
 
 /** What automatic pause removal takes out of the trim, for display and restore. */
-export function autoRemovedRanges(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): TimeRange[] {
+export function autoRemovedRanges(clip: TightenClip, transcript: Transcript | null): TimeRange[] {
   if (!clip.edit.tightenCuts || !transcript) return []
-  const auto = computeKeptSegments(transcript, clip.edit.start, clip.edit.end, clip.visualStory?.protectedRanges)
+  const auto = computeKeptSegments(transcript, clip.edit.start, clip.edit.end, tightenProtectedRanges(clip))
   return auto ? subtractRanges([{ start: clip.edit.start, end: clip.edit.end }], auto) : []
 }
 

@@ -5,6 +5,7 @@ import type {
   CaptionVideoOptions,
   Clip,
   CustomFont,
+  HandoffEvent,
   ImportProgress,
   PipelineProgress,
   Project,
@@ -64,6 +65,37 @@ function unregisterFontFamily(family: string): void {
   loadedFontFaces.delete(family)
 }
 
+/** Command-line imports whose outcome has arrived; later progress for them is stale. */
+const settledImports = new Set<number>()
+
+/**
+ * An agent ran `cutawan --import-package`: show the import on the home
+ * screen, then open the project it made (or say why it failed).
+ */
+function handleHandoffEvent(event: HandoffEvent): void {
+  if (settledImports.has(event.importId)) return
+  const store = useStore
+  if (event.state === 'importing') {
+    const first = store.getState().importProgress === null
+    store.setState({
+      importProgress: { progress: event.progress, message: event.message },
+      // The home screen is where import progress shows; jump there once.
+      ...(first ? { project: null, screen: 'home' as const, selectedClipId: null, pipelineError: null } : {})
+    })
+    return
+  }
+  settledImports.add(event.importId)
+  store.setState({ importProgress: null })
+  if (event.state === 'failed') {
+    store.setState({ project: null, screen: 'home', selectedClipId: null, pipelineError: cleanIpcError(event.message) })
+    return
+  }
+  void store.getState().refreshProjects()
+  void store.getState().openProject(event.projectId).catch((err: unknown) => {
+    store.setState({ pipelineError: err instanceof Error ? cleanIpcError(err.message) : String(err) })
+  })
+}
+
 export type Screen = 'home' | 'processing' | 'clips' | 'editor'
 
 /**
@@ -118,6 +150,9 @@ interface AppState {
   importVideo: () => Promise<void>
   importVideoFromPath: (path: string) => Promise<void>
   importVideoFromUrl: (url: string) => Promise<void>
+  /** Pick a Metachlorian package (folder, manifest.json or .zip) and open it as a project. */
+  importPackage: () => Promise<void>
+  importPackageFromPath: (path: string) => Promise<void>
   openProject: (id: string) => Promise<void>
   deleteProject: (id: string) => Promise<void>
   relinkVideo: () => Promise<void>
@@ -196,6 +231,9 @@ export const useStore = create<AppState>((set, get) => ({
   historyVersion: 0,
 
   init: async () => {
+    // Before any await: an import launched from the command line reports here,
+    // and the queue drained below holds whatever finished before we listened.
+    window.cutawan.onHandoffEvent(handleHandoffEvent)
     const [settings, projects, customFonts] = await Promise.all([
       window.cutawan.getSettings(),
       window.cutawan.listProjects(),
@@ -203,6 +241,7 @@ export const useStore = create<AppState>((set, get) => ({
     ])
     set({ settings, projects, customFonts })
     void registerFonts(customFonts)
+    for (const event of await window.cutawan.drainHandoffEvents()) handleHandoffEvent(event)
     window.cutawan.onPipelineProgress((p) => set({ pipelineProgress: p }))
     window.cutawan.onImportProgress((p) => {
       if (get().importProgress !== null) set({ importProgress: p })
@@ -264,6 +303,27 @@ export const useStore = create<AppState>((set, get) => ({
       const project = await window.cutawan.createProjectFromUrl(url.trim())
       set({ project, screen: 'home', importProgress: null })
       await get().refreshProjects()
+    } catch (err) {
+      set({
+        importProgress: null,
+        pipelineError: err instanceof Error ? cleanIpcError(err.message) : String(err)
+      })
+    }
+  },
+
+  importPackage: async () => {
+    const path = await window.cutawan.selectPackage()
+    if (!path) return
+    await get().importPackageFromPath(path)
+  },
+
+  importPackageFromPath: async (path) => {
+    set({ importProgress: { progress: -1, message: 'Importing Metachlorian package…' }, pipelineError: null })
+    try {
+      const project = await window.cutawan.importPackage(path)
+      set({ importProgress: null })
+      await get().refreshProjects()
+      await get().openProject(project.id)
     } catch (err) {
       set({
         importProgress: null,

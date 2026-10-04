@@ -23,6 +23,7 @@ import { needsReframe, userClipEdit } from '@shared/reframe'
 import { automaticLayoutShots, validLayoutShots } from '@shared/contentType'
 import { useStore } from '../store'
 import PreviewPlayer from './PreviewPlayer'
+import HandoffBanner from './HandoffBanner'
 import CompositionControls from './CompositionControls'
 import TimelineEditor from './TimelineEditor'
 import { cutRange, keepsPlayback } from '@shared/editOps'
@@ -145,6 +146,7 @@ export default function EditorScreen(): React.JSX.Element {
   return (
     <div className="flex h-full min-h-0">
       <div className="flex min-h-0 flex-1 flex-col p-6">
+        <HandoffBanner className="mb-4 shrink-0" />
         <PreviewPlayer project={project} clip={clip} />
       </div>
 
@@ -446,7 +448,8 @@ export default function EditorScreen(): React.JSX.Element {
           )}
         </Section>
 
-        {!wholeVideo && (
+        {/* A full-video edit only has B-roll when a package brought inserts. */}
+        {(!wholeVideo || clip.broll.length > 0) && (
         <Section icon={ImagePlus} title="B-roll">
           {clip.broll.length === 0 ? (
             <p className="text-xs leading-relaxed text-zinc-500">
@@ -462,7 +465,16 @@ export default function EditorScreen(): React.JSX.Element {
                     item.enabled ? '' : 'opacity-50'
                   }`}
                 >
-                  {item.imagePath && (
+                  {item.imagePath && item.kind === 'video' ? (
+                    // The media fragment shows the insert's first frame, not the file's.
+                    <video
+                      src={`${window.cutawan.mediaUrl(item.imagePath)}#t=${(item.mediaIn ?? 0).toFixed(2)}`}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      className="h-12 w-16 shrink-0 rounded-lg bg-black object-cover"
+                    />
+                  ) : item.imagePath && (
                     <img
                       src={window.cutawan.mediaUrl(item.imagePath)}
                       alt={item.trigger}
@@ -472,6 +484,7 @@ export default function EditorScreen(): React.JSX.Element {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-semibold">“{item.trigger}”</div>
                     <div className="mt-0.5 text-[11px] tabular-nums text-zinc-500">
+                      {item.kind === 'video' ? 'Video · ' : ''}
                       {formatTimecode(item.start - clip.edit.start)} ·{' '}
                       {(item.end - item.start).toFixed(1)}s
                     </div>

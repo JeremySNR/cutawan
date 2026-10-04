@@ -7,6 +7,7 @@ import {
   ImagePlus,
   Link2,
   Loader2,
+  PackageOpen,
   ScanFace,
   Sparkles,
   Trash2,
@@ -72,6 +73,8 @@ function ImportHero(): React.JSX.Element {
   const importVideo = useStore((s) => s.importVideo)
   const importVideoFromPath = useStore((s) => s.importVideoFromPath)
   const importVideoFromUrl = useStore((s) => s.importVideoFromUrl)
+  const importPackage = useStore((s) => s.importPackage)
+  const importPackageFromPath = useStore((s) => s.importPackageFromPath)
   const importProgress = useStore((s) => s.importProgress)
   const setPipelineError = (msg: string | null): void => useStore.setState({ pipelineError: msg })
   const pipelineError = useStore((s) => s.pipelineError)
@@ -89,6 +92,12 @@ function ImportHero(): React.JSX.Element {
     if (disabled) return
     const file = e.dataTransfer.files[0]
     if (!file) return
+    // A Metachlorian package arrives as its .zip or its manifest.json.
+    if (/\.zip$/i.test(file.name) || file.name === 'manifest.json') {
+      const path = window.cutawan.pathForFile(file)
+      if (path) void importPackageFromPath(path)
+      return
+    }
     if (!isVideoFile(file.name)) {
       setPipelineError(`"${file.name}" is not a supported video file (MP4, MOV, MKV, WEBM and more).`)
       return
@@ -118,7 +127,7 @@ function ImportHero(): React.JSX.Element {
       {pipelineError && (
         <div className="mt-6 flex w-full max-w-xl items-start gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-left text-sm text-red-300">
           <AlertTriangle size={17} className="mt-0.5 shrink-0" />
-          <span>{pipelineError}</span>
+          <span className="whitespace-pre-line">{pipelineError}</span>
         </div>
       )}
 
@@ -202,6 +211,16 @@ function ImportHero(): React.JSX.Element {
               </button>
             </form>
             <CookieBrowserPicker />
+            <button
+              type="button"
+              data-testid="import-package-button"
+              onClick={() => void importPackage()}
+              disabled={disabled}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-surface-700 bg-surface-900 px-4 py-2.5 text-xs font-semibold text-zinc-300 transition hover:border-white/25 hover:bg-surface-800 disabled:opacity-40"
+            >
+              <PackageOpen size={15} className="text-zinc-500" />
+              Import Metachlorian package…
+            </button>
           </>
         )}
       </div>

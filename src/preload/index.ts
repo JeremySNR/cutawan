@@ -10,6 +10,7 @@ import type {
   ExportProgress,
   ExportResult,
   GpuEncoderStatus,
+  HandoffEvent,
   ImportProgress,
   PipelineProgress,
   Project,
@@ -36,6 +37,17 @@ const api = {
   },
   selectVideo: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectVideo'),
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
+
+  selectPackage: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectPackage'),
+  importPackage: (packagePath: string): Promise<Project> =>
+    ipcRenderer.invoke('project:importPackage', packagePath),
+  /** Imports started from the command line that finished before the renderer listened. */
+  drainHandoffEvents: (): Promise<HandoffEvent[]> => ipcRenderer.invoke('handoff:drain'),
+  onHandoffEvent: (cb: (e: HandoffEvent) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, e: HandoffEvent): void => cb(e)
+    ipcRenderer.on('handoff:event', listener)
+    return () => ipcRenderer.removeListener('handoff:event', listener)
+  },
 
   createProject: (videoPath: string): Promise<Project> => ipcRenderer.invoke('project:create', videoPath),
   createProjectFromUrl: (url: string): Promise<Project> =>
