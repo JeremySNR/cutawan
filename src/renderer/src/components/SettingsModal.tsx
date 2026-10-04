@@ -27,6 +27,7 @@ import { useStore } from '../store'
 import { NotesList, userNotes, WhatsNewDialog } from './WhatsNew'
 import { parseNotes } from '@shared/releaseNotes'
 import SizeTargetControls from './SizeTargetControls'
+import BrollSourceSettings from './BrollSourceSettings'
 import { DEFAULT_BRAND_COLORS, resolveCaptionStyle } from '@shared/captionStyles'
 import type {
   BrandColors,
@@ -78,10 +79,11 @@ const WATERMARK_POSITIONS: Array<{ value: WatermarkPosition; label: string }> = 
   { value: 'bottom-right', label: 'Bottom right' }
 ]
 
-type SectionId = 'general' | 'export' | 'branding' | 'voice' | 'fonts' | 'updates'
+type SectionId = 'general' | 'broll' | 'export' | 'branding' | 'voice' | 'fonts' | 'updates'
 
 const SECTIONS: Array<{ id: SectionId; label: string; icon: typeof KeyRound }> = [
   { id: 'general', label: 'API & models', icon: KeyRound },
+  { id: 'broll', label: 'B-roll', icon: ImagePlus },
   { id: 'export', label: 'Export', icon: MonitorPlay },
   { id: 'branding', label: 'Branding', icon: Stamp },
   { id: 'voice', label: 'Brand voice', icon: MessageSquareQuote },
@@ -418,6 +420,7 @@ export default function SettingsModal(): React.JSX.Element {
             </div>
           )}
 
+          {section === 'broll' && <BrollSourceSettings />}
           {section === 'branding' && <BrandingSection />}
           {section === 'voice' && <BrandVoiceSection />}
           {section === 'fonts' && <FontsSection />}

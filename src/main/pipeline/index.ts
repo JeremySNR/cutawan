@@ -15,6 +15,7 @@ import { timed } from './timing'
 import { assessClipVisuals, ensembleScore } from './visualScore'
 import { completeVisualStory } from './visualStory'
 import { attachBroll } from './broll'
+import { metachlorianBrollProvider, webBrollProvider } from './brollProviders'
 import {
   assertCookieAuthSupported,
   cookieCopyErrorHint,
@@ -29,7 +30,14 @@ import {
   YtDlpError,
   type CookieAuthOptions
 } from './ytdlp'
-import { getAnalysisCredential, getImportPreferences, getModelPreferences, missingCredentialName } from '../settings'
+import {
+  getAnalysisCredential,
+  getBrollPreferences,
+  getImportPreferences,
+  getMetachlorianConnection,
+  getModelPreferences,
+  missingCredentialName
+} from '../settings'
 import { projectDir, saveProject, updateProject } from '../projects'
 
 export async function createProject(videoPath: string): Promise<Project> {
@@ -290,12 +298,17 @@ export async function analyzeProject(
     })
 
     if (options.broll) {
-      onProgress({ stage: 'broll', progress: 0.82, message: 'Finding B-roll images…' })
+      const brollPrefs = getBrollPreferences()
+      const provider = brollPrefs.source === 'metachlorian'
+        ? metachlorianBrollProvider(getMetachlorianConnection(), brollPrefs.intendedUse)
+        : webBrollProvider
+      const brollMessage = provider.queryStyle === 'footage' ? 'Finding B-roll footage in Metachlorian…' : 'Finding B-roll images…'
+      onProgress({ stage: 'broll', progress: 0.82, message: brollMessage })
       let brolled = 0
       await timed('broll', () => mapLimit(clips, 3, async (clip) => {
         signal?.throwIfAborted()
         try {
-          await attachBroll(apiKey, settings.analysisModel, transcript, project.id, clip, signal)
+          await attachBroll(apiKey, settings.analysisModel, transcript, project.id, clip, signal, provider)
         } catch (err) {
           throwIfSubscriptionError(err)
           if (signal?.aborted) throw err
@@ -306,7 +319,7 @@ export async function analyzeProject(
         onProgress({
           stage: 'broll',
           progress: 0.82 + (brolled / clips.length) * 0.08,
-          message: 'Finding B-roll images…'
+          message: brollMessage
         })
       }))
       await updateProject(project.id, (p) => {

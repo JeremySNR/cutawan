@@ -15,6 +15,7 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 - **Import Metachlorian package…** on the home screen opens a rough cut built in Metachlorian as a project: the interview becomes the video, its transcript is used for captions straight away (nothing to transcribe, no API calls), and the chosen B-roll is placed as video inserts. You can also drop the package's .zip onto the home screen.
 - B-roll inserts can now be video clips as well as images. They play muted over the speaker in the preview and in the export, can be switched between full screen and overlay or turned off like image inserts, and pause removal never cuts through the middle of one.
 - Imported packages show their rights verdict in a banner above the editor and the clip list. Anything other than "allowed" stays visible with its reasons, along with any credit lines the footage requires and when its licence expires.
+- AI B-roll can come from your own **Metachlorian** footage library instead of web images. Pick it in Settings → B-roll, add the address and an access token, and check the connection. Clip finding then asks for footage to cut away to, and inserts arrive as video clips, optionally only footage cleared for the use you set.
 - Agents and scripts can run `cutawan --import-package "<folder or .zip>"`. If Cutawan is already open, it imports the package into the open window and brings it to the front instead of starting a second copy.
 
 ### Improved

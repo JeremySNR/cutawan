@@ -122,10 +122,44 @@ footage yet) or in a format Cutawan cannot use, the project imports without
 one and the banner says so. **Caption whole video** then transcribes it as for
 any other video.
 
+## Metachlorian as the B-roll source
+
+Cutawan's **AI B-roll** step can take footage from a Metachlorian library
+instead of web images. In **Settings → B-roll**, choose **Metachlorian
+library** and enter:
+
+- **Address**: the server's base URL, e.g. `http://127.0.0.1:8770`.
+- **Access token**: create one in Metachlorian Settings → Agents with the
+  `library:read` and `media:export` scopes. It is stored encrypted like the
+  API keys. A solo library on the same computer works without one.
+  `METACHLORIAN_TOKEN` in the environment is used when none is saved.
+- **Intended use** (optional): use, channel and territory, e.g. `marketing`,
+  `organic_social`, `GB`. Metachlorian then only offers footage cleared for
+  that use. A library with no rights records offers nothing under an intended
+  use, so leave it blank to search everything.
+
+**Check connection** confirms the server is Metachlorian and that the token
+can search.
+
+When you generate clips with AI B-roll on, the clip-finding model is asked for
+footage-style queries ("hands typing on a laptop close-up") rather than names
+of things. For each one Cutawan:
+
+1. searches the library (`POST /api/search`), first for shots tagged as
+   B-roll and then for any shot, keeping shots of at least two seconds;
+2. takes the best-ranked shot long enough for the insert, or else the longest,
+   and asks Metachlorian for a proxy trim of it (`POST /api/export/clip`);
+3. downloads the trim over HTTP (so remote libraries work too) into the
+   project's `broll/` folder and places it as a video insert. A shot shorter
+   than the slot shortens the insert.
+
+Every request carries `X-Metachlorian: 1` and, when a token is set,
+`Authorization: Bearer <token>`. Image B-roll from the web stays the default
+and works exactly as before.
+
 ## Not supported yet
 
-- `broll_library` packages, and Metachlorian as a live B-roll source
-  (searching the library from Cutawan's B-roll step).
+- `broll_library` packages.
 - `cutawan://import?url=…` links for remote Metachlorian instances.
 - `cutawan.follow_speaker`: the import does not run on-device speaker
   tracking across the whole video. Use the package's subject track, or run
@@ -135,6 +169,9 @@ any other video.
 
 ## Testing
 
+- `tests/metachlorian.test.ts` covers the B-roll source against a scripted
+  server (connection check, search and export requests, fallbacks, failed
+  downloads, footage prompts).
 - `tests/handoff.test.ts` covers the importer and validator against the
   fixture package in `tests/fixtures/metachlorian-package/` (valid, zip,
   traversal, symlink escape, missing file, wrong major version, checksum,

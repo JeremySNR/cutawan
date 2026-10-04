@@ -316,6 +316,7 @@ function SetupPanel(): React.JSX.Element {
   const [videoType, setVideoType] = useState<VideoType>(project.videoType ?? 'auto')
   // Off by default: B-roll costs extra LLM/image calls and splits opinion.
   const [broll, setBroll] = useState(false)
+  const footageBroll = useStore((s) => s.settings?.brollSource === 'metachlorian')
   // Off by default: hook-first trimming rewrites clip starts with an extra LLM pass.
   const [hookFirst, setHookFirst] = useState(false)
   const [visualDiscovery, setVisualDiscovery] = useState(project.visualDiscovery ?? false)
@@ -447,11 +448,12 @@ function SetupPanel(): React.JSX.Element {
                 <span className="min-w-0">
                   <span className="flex items-center gap-2 text-sm font-semibold">
                     <ImagePlus size={15} className="text-accent-400" />
-                    AI B-roll images
+                    {footageBroll ? 'AI B-roll footage' : 'AI B-roll images'}
                   </span>
                   <span className="mt-1 block text-xs leading-relaxed text-zinc-500">
-                    When you mention a character, person or place ("Yoda"), a matching image pops
-                    over the video at that exact word. Every insert is editable per clip.
+                    {footageBroll
+                      ? 'Cutaways to matching footage from your Metachlorian library, timed to the words they illustrate. Every insert is editable per clip.'
+                      : 'When you mention a character, person or place ("Yoda"), a matching image pops over the video at that exact word. Every insert is editable per clip.'}
                   </span>
                 </span>
                 <span

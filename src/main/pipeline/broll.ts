@@ -3,13 +3,14 @@ import { join } from 'node:path'
 import type { BrollItem, Clip, Transcript } from '@shared/types'
 import { wordsInRange } from '@shared/captionLayout'
 import { chatJSON } from './openai'
-import { searchImage, downloadImage } from './imagesearch'
+import { webBrollProvider, type BrollProvider } from './brollProviders'
 import { projectDir } from '../projects'
 
 /**
  * AI B-roll: finds spoken keywords worth illustrating (characters, people,
  * places, objects — "when I say Yoda, show Yoda") and attaches downloaded
- * images timed to the exact word.
+ * images timed to the exact word. With a Metachlorian library as the source,
+ * it asks for footage to cut away to instead, and attaches video inserts.
  */
 
 interface RawSuggestion {
@@ -62,6 +63,19 @@ const RESPONSE_SCHEMA = {
   }
 } as const
 
+/** Footage libraries match descriptions of shots, not names of things. */
+const FOOTAGE_SYSTEM_PROMPT = `You suggest B-roll cutaways for a short talking-head social video, to be found in a stock-footage library. You receive the clip's transcript as words with start timestamps.
+
+Rules:
+- Pick moments where cutting away to footage adds impact: a described action, place, object or situation ("typing all night", "the office", "our warehouse", "a busy street").
+- Only suggest a cutaway when footage genuinely helps. Quality over quantity.
+- At most one insert per ~8 seconds of clip; never let inserts overlap; total inserts must cover less than 40% of the clip.
+- "start" MUST be the timestamp of the trigger word from the transcript (the footage appears as the word is spoken).
+- duration: 2-4 seconds, never past the end of the clip.
+- Queries describe the shot you want to see, the way an editor searches a footage library: subject, action, framing and mood ("hands typing on a laptop close-up", "aerial city traffic at night", "team laughing around a meeting table"). No names of people, brands or films.
+- mode: fullscreen for most cutaways; overlay only when the speaker's reaction matters.
+- Return an empty list when nothing is worth illustrating.`
+
 const SYSTEM_PROMPT = `You suggest B-roll image inserts for a short talking-head social video. You receive the clip's transcript as words with start timestamps.
 
 Rules:
@@ -79,7 +93,8 @@ export async function suggestBroll(
   model: string,
   transcript: Transcript,
   clip: Clip,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  queryStyle: BrollProvider['queryStyle'] = 'image'
 ): Promise<Array<Omit<BrollItem, 'imagePath'>>> {
   const words = wordsInRange(transcript, clip.edit.start, clip.edit.end)
   if (words.length === 0) return []
@@ -90,7 +105,7 @@ export async function suggestBroll(
     apiKey,
     model,
     [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: queryStyle === 'footage' ? FOOTAGE_SYSTEM_PROMPT : SYSTEM_PROMPT },
       {
         role: 'user',
         content: `Clip runs from ${clip.edit.start.toFixed(2)}s to ${clip.edit.end.toFixed(2)}s (${clipDur.toFixed(1)}s long). Timestamps below are absolute.\n\nTranscript words:\n${wordList}`
@@ -131,18 +146,32 @@ export async function attachBroll(
   transcript: Transcript,
   projectId: string,
   clip: Clip,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  provider: BrollProvider = webBrollProvider
 ): Promise<void> {
-  const suggestions = await suggestBroll(apiKey, model, transcript, clip, signal)
+  const suggestions = await suggestBroll(apiKey, model, transcript, clip, signal, provider.queryStyle)
   const destDir = join(projectDir(projectId), 'broll')
   const items: BrollItem[] = []
   for (const suggestion of suggestions) {
     signal?.throwIfAborted()
-    const found = await searchImage(suggestion.query, suggestion.trigger, signal)
+    const found = await provider.find(
+      { trigger: suggestion.trigger, query: suggestion.query, durationSec: suggestion.end - suggestion.start },
+      destDir,
+      `${clip.id}-${suggestion.id}`,
+      signal
+    )
     if (!found) continue
-    const imagePath = await downloadImage(found.imageUrl, destDir, `${clip.id}-${suggestion.id}`, signal)
-    if (!imagePath) continue
-    items.push({ ...suggestion, imagePath, sourceUrl: found.sourceUrl })
+    // A shot shorter than the slot ends the insert early rather than freezing.
+    const end = found.maxDurationSec !== undefined
+      ? Math.min(suggestion.end, suggestion.start + found.maxDurationSec)
+      : suggestion.end
+    items.push({
+      ...suggestion,
+      end,
+      imagePath: found.path,
+      sourceUrl: found.sourceUrl,
+      ...(found.kind === 'video' ? { kind: 'video' as const, mediaIn: found.mediaIn ?? 0 } : {})
+    })
   }
   clip.broll = items
 }

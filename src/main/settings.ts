@@ -5,6 +5,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   AppSettings,
+  BrollSource,
+  MetachlorianIntendedUse,
   BrandingSettings,
   BrandVoiceSettings,
   BrowserCookieSource,
@@ -18,6 +20,7 @@ import { DEFAULT_BRAND_COLORS } from '@shared/captionStyles'
 import { normalizeSizeTargetMb } from '@shared/uploadBudget'
 import { chatApiBase, configureOpenAiEndpoints } from './pipeline/openai'
 import { DEFAULT_OPENROUTER_MODEL, DEFAULT_OPENROUTER_TRANSCRIPTION_MODEL, isSupportedTranscriptionModel } from '@shared/openrouter'
+import { normaliseMetachlorianUrl, type MetachlorianConnection } from './pipeline/metachlorian'
 
 
 interface StoredSettings {
@@ -42,7 +45,14 @@ interface StoredSettings {
   branding: BrandingSettings
   brandVoice: BrandVoiceSettings
   importCookiesBrowser: BrowserCookieSource
+  brollSource: BrollSource
+  metachlorianUrl: string
+  /** Metachlorian access token, encrypted the same way as `apiKeyEncrypted`. */
+  metachlorianTokenEncrypted: string
+  metachlorianIntendedUse: MetachlorianIntendedUse
 }
+
+const DEFAULT_INTENDED_USE: MetachlorianIntendedUse = { use: '', channel: '', territory: '' }
 
 const DEFAULT_BRANDING: BrandingSettings = {
   enabled: false,
@@ -81,7 +91,11 @@ const DEFAULTS: StoredSettings = {
   sizeTargetMb: null,
   branding: DEFAULT_BRANDING,
   brandVoice: DEFAULT_BRAND_VOICE,
-  importCookiesBrowser: ''
+  importCookiesBrowser: '',
+  brollSource: 'web',
+  metachlorianUrl: '',
+  metachlorianTokenEncrypted: '',
+  metachlorianIntendedUse: DEFAULT_INTENDED_USE
 }
 
 function settingsPath(): string {
@@ -132,7 +146,9 @@ function load(): StoredSettings {
           ...(parsed.branding ?? {}),
           colors: { ...DEFAULT_BRAND_COLORS, ...(parsed.branding?.colors ?? {}) }
         },
-        brandVoice: { ...DEFAULT_BRAND_VOICE, ...(parsed.brandVoice ?? {}) }
+        brandVoice: { ...DEFAULT_BRAND_VOICE, ...(parsed.brandVoice ?? {}) },
+        brollSource: parsed.brollSource === 'metachlorian' ? 'metachlorian' : 'web',
+        metachlorianIntendedUse: { ...DEFAULT_INTENDED_USE, ...(parsed.metachlorianIntendedUse ?? {}) }
       }
       applyEndpoints(cache)
       return cache
@@ -183,6 +199,24 @@ export function getOpenRouterKey(): string {
   return decryptKey(load().openRouterKeyEncrypted) || process.env.OPENROUTER_API_KEY || ''
 }
 
+export function getMetachlorianToken(): string {
+  return decryptKey(load().metachlorianTokenEncrypted) || process.env.METACHLORIAN_TOKEN || ''
+}
+
+/** The configured Metachlorian server, with any typed (unsaved) values taking precedence. */
+export function getMetachlorianConnection(typed?: { url?: string; token?: string }): MetachlorianConnection {
+  return {
+    url: normaliseMetachlorianUrl(typed?.url || load().metachlorianUrl),
+    token: typed?.token?.trim() || getMetachlorianToken()
+  }
+}
+
+/** Synchronous access to the B-roll source preferences. */
+export function getBrollPreferences(): { source: BrollSource; intendedUse: MetachlorianIntendedUse } {
+  const s = load()
+  return { source: s.brollSource, intendedUse: s.metachlorianIntendedUse }
+}
+
 function maskKey(key: string): string {
   return key.length > 8 ? `${key.slice(0, 5)}…${key.slice(-4)}` : key ? '•••' : ''
 }
@@ -229,7 +263,12 @@ export async function getSettings(): Promise<AppSettings> {
     brandVoice: s.brandVoice,
     appVersion: app.getVersion(),
     importCookiesBrowser: s.importCookiesBrowser,
-    hasImportCookiesFile: getImportCookiesPath() !== null
+    hasImportCookiesFile: getImportCookiesPath() !== null,
+    brollSource: s.brollSource,
+    metachlorianUrl: s.metachlorianUrl,
+    hasMetachlorianToken: getMetachlorianToken().length > 0,
+    metachlorianTokenMasked: maskKey(getMetachlorianToken()),
+    metachlorianIntendedUse: { ...s.metachlorianIntendedUse }
   }
 }
 
@@ -327,6 +366,13 @@ export async function updateSettings(update: SettingsUpdate): Promise<AppSetting
   }
   if (update.importCookiesBrowser !== undefined) s.importCookiesBrowser = update.importCookiesBrowser
   if (update.clearImportCookiesFile) await clearImportCookiesFile()
+  if (update.brollSource !== undefined) s.brollSource = update.brollSource === 'metachlorian' ? 'metachlorian' : 'web'
+  if (update.metachlorianUrl !== undefined) s.metachlorianUrl = normaliseMetachlorianUrl(update.metachlorianUrl)
+  if (update.metachlorianToken !== undefined) s.metachlorianTokenEncrypted = encryptKey(update.metachlorianToken.trim())
+  if (update.metachlorianIntendedUse !== undefined) {
+    const next = { ...s.metachlorianIntendedUse, ...update.metachlorianIntendedUse }
+    s.metachlorianIntendedUse = { use: next.use.trim(), channel: next.channel.trim(), territory: next.territory.trim().toUpperCase() }
+  }
   persist(s)
   return getSettings()
 }

@@ -90,7 +90,7 @@ On the default API route, a typical estimate is **~$0.36/hour of video** for Whi
 - **Speaker-aware auto-reframe.** On-device audio-visual active speaker detection (UltraFace face tracking + the LR-ASD model via ONNX Runtime, no cloud) checks every face's lip movement against the actual soundtrack, so the crop stays on the person talking — not whoever moves or gestures. The 9:16 crop cuts between speakers like a camera switch.
 - **12 caption styles plus your own fonts.** Karaoke-style word highlighting burned in with libass. Upload any TTF/OTF and previews match exports exactly.
 - **Your branding.** Overlay your logo or watermark (corner, size, opacity) on the preview and every export.
-- **AI B-roll.** Say "Yoda" and a picture of Yoda pops over the video at that word. Uses Wikipedia and Openverse images, no extra API keys.
+- **AI B-roll.** Say "Yoda" and a picture of Yoda pops over the video at that word. Uses Wikipedia and Openverse images, no extra API keys, or footage from your own [Metachlorian](docs/metachlorian-handoff.md#metachlorian-as-the-b-roll-source) library as video inserts.
 - **A real editor.** Filmstrip trim with waveform and live playhead, click-to-seek transcript that doubles as a trim tool, aspect ratios (9:16 / 1:1 / 16:9), and a live preview that matches the export.
 
 **Shipping them**
@@ -155,6 +155,7 @@ src/
 │   │   ├── ytdlp.ts       yt-dlp binary management + URL downloads
 │   │   ├── broll.ts       LLM keyword tagging for B-roll inserts
 │   │   ├── imagesearch.ts keyless Wikipedia/Openverse image search
+│   │   ├── brollProviders.ts web images or Metachlorian footage (metachlorian.ts client)
 │   │   ├── encoders.ts    NVENC detection/verification, GPU ffmpeg download
 │   │   ├── captions.ts    ASS karaoke subtitle generation
 │   │   ├── socialCaption.ts AI post-caption writer

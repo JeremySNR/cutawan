@@ -34,11 +34,13 @@ import { sanitizeFileName, uniqueOutputPath } from './exportPath'
 import { deleteProject, listProjects, loadProject, updateProject } from './projects'
 import { importHandoffPackage } from './handoff'
 import { drainHandoffEvents } from './handoffLaunch'
+import { checkMetachlorian } from './pipeline/metachlorian'
 import {
   getAnalysisCredential,
   getBrandingSettings,
   getBrandVoiceSettings,
   getExportPreferences,
+  getMetachlorianConnection,
   getModelPreferences,
   getSettings,
   missingCredentialName,
@@ -395,6 +397,8 @@ export function registerIpcHandlers(): void {
   handle('settings:checkLocalWhisper', () => checkLocalWhisperSetup())
   handle('openrouter:models', (_e, refresh?: boolean) => listOpenRouterModels(refresh === true))
   handle('openrouter:checkKey', (_e, key?: string) => checkOpenRouterKey(key))
+  handle('metachlorian:check', (_e, typed?: { url?: string; token?: string }) =>
+    checkMetachlorian(getMetachlorianConnection(typed)))
   handle('settings:installLocalWhisper', async (event, model: LocalWhisperModel, pythonPath: string) => {
     const result = await installLocalWhisper(model, pythonPath, progress => {
       if (!event.sender.isDestroyed()) event.sender.send('whisper:installProgress', progress)

@@ -27,6 +27,8 @@ const api = {
   checkLocalWhisperSetup: (): Promise<{ message: string }> => ipcRenderer.invoke('settings:checkLocalWhisper'),
   listOpenRouterModels: (refresh = false): Promise<OpenRouterCatalog> => ipcRenderer.invoke('openrouter:models', refresh),
   checkOpenRouterKey: (key?: string): Promise<{ message: string }> => ipcRenderer.invoke('openrouter:checkKey', key),
+  checkMetachlorian: (typed?: { url?: string; token?: string }): Promise<{ message: string }> =>
+    ipcRenderer.invoke('metachlorian:check', typed),
   installLocalWhisper: (model: 'small' | 'large-v3', pythonPath: string): Promise<{ pythonPath: string; modelPath: string }> =>
     ipcRenderer.invoke('settings:installLocalWhisper', model, pythonPath),
   cancelLocalWhisperInstall: (): Promise<void> => ipcRenderer.invoke('settings:cancelLocalWhisperInstall'),

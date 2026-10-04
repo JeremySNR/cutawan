@@ -548,6 +548,19 @@ export interface GpuEncoderStatus {
   canDownloadFfmpeg: boolean
 }
 
+/** Where AI B-roll comes from: web images (the default) or a Metachlorian footage library. */
+export type BrollSource = 'web' | 'metachlorian'
+
+/** Rights intent sent to Metachlorian with searches and exports; empty = not sent. */
+export interface MetachlorianIntendedUse {
+  /** Usage term, e.g. "marketing". */
+  use: string
+  /** Channel term, e.g. "organic_social". */
+  channel: string
+  /** ISO country code, e.g. "GB". */
+  territory: string
+}
+
 export interface AppSettings {
   /** False only on a fresh installation until onboarding is finished or skipped. */
   setupComplete: boolean
@@ -611,6 +624,12 @@ export interface AppSettings {
   importCookiesBrowser: BrowserCookieSource
   /** True when a Netscape cookies.txt file is stored for URL imports. */
   hasImportCookiesFile: boolean
+  brollSource: BrollSource
+  /** Base URL of the Metachlorian server, e.g. http://127.0.0.1:8770. */
+  metachlorianUrl: string
+  hasMetachlorianToken: boolean
+  metachlorianTokenMasked: string
+  metachlorianIntendedUse: MetachlorianIntendedUse
 }
 
 export interface SettingsUpdate {
@@ -634,6 +653,11 @@ export interface SettingsUpdate {
   brandVoice?: Partial<BrandVoiceSettings>
   importCookiesBrowser?: BrowserCookieSource
   clearImportCookiesFile?: boolean
+  brollSource?: BrollSource
+  metachlorianUrl?: string
+  /** Stored encrypted; an empty string removes the stored token. */
+  metachlorianToken?: string
+  metachlorianIntendedUse?: Partial<MetachlorianIntendedUse>
 }
 
 export interface PipelineError {
