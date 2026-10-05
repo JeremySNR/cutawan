@@ -62,7 +62,38 @@ function escapeAss(text: string): string {
   return text.replace(/\\/g, '').replace(/[{}]/g, '').replace(/\n/g, ' ')
 }
 
-function renderGroupText(group: WordGroup, activeIndex: number, style: CaptionStyle): string {
+/** Fully transparent text, outline and shadow: keeps a word's space in the layout. */
+const HIDDEN = '\\alpha&HFF&'
+
+/**
+ * Pop for the word being spoken, matching the preview's `captionPop`
+ * (scale 0.94 -> 1 over 90ms, ease-out). Accel 0.5 decelerates like ease-out.
+ */
+const POP_IN = '\\fscx94\\fscy94\\t(0,90,0.5,\\fscx100\\fscy100)'
+
+/**
+ * One layer of a karaoke caption.
+ *
+ * libass has no CSS transform: scaling a word changes its advance width, so a
+ * centred line re-flows and every other word slides sideways each time the
+ * highlight moves on (17-26px on a 1080px frame, see
+ * scripts/bench-caption-stability.ts). The preview scales the word with a
+ * transform that moves nothing else. To match it, each word event is drawn
+ * twice from the same text, so both layers share one layout:
+ *
+ * - `base` draws every word except the active one, which stays in the layout
+ *   but is transparent.
+ * - `pop` draws only the active word. Scaling one word re-centres the line
+ *   by half its growth, which leaves that word's own centre where it was, so
+ *   the word pops in place. Every other word in this layer is transparent.
+ */
+function renderGroupText(
+  group: WordGroup,
+  activeIndex: number,
+  style: CaptionStyle,
+  layer: 'base' | 'pop',
+  animate: boolean
+): string {
   const highlight = assColor(style.highlightColor)
   const base = assColor(style.textColor)
   const lines: string[] = []
@@ -72,17 +103,14 @@ function renderGroupText(group: WordGroup, activeIndex: number, style: CaptionSt
     for (const word of line) {
       const raw = escapeAss(word.text)
       const text = style.uppercase ? raw.toUpperCase() : raw
-      if (index === activeIndex) {
-        const pop = '\\t(0,70,\\fscx109\\fscy109)'
-        if (style.highlightBoxColor) {
-          // Fat outline in the pill colour approximates a rounded label.
-          const pill = assColor(style.highlightBoxColor)
-          parts.push(`{\\c${highlight}\\bord10\\3c${pill}\\fscx100\\fscy100${pop}}${text}{\\r}`)
-        } else {
-          parts.push(`{\\c${highlight}\\fscx100\\fscy100${pop}}${text}{\\r}`)
-        }
+      const active = index === activeIndex
+      if (active) {
+        // Fat outline in the pill colour approximates a rounded label.
+        const pill = style.highlightBoxColor ? `\\bord10\\3c${assColor(style.highlightBoxColor)}` : ''
+        const look = layer === 'pop' ? (animate ? POP_IN : '') : HIDDEN
+        parts.push(`{\\c${highlight}${pill}${look}}${text}{\\r}`)
       } else {
-        parts.push(`{\\c${base}}${text}{\\r}`)
+        parts.push(layer === 'pop' ? `{${HIDDEN}}${text}{\\r}` : `{\\c${base}}${text}{\\r}`)
       }
       index++
     }
@@ -231,7 +259,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const from = cuts[part], until = cuts[part + 1]
         const position = captionPositionAt(opts.positionRanges, opts.clipStart + (from + until) / 2, style.positionY)
         const anchor = `{\\an5\\q2\\pos(${captionX},${Math.round(position * opts.height)})}`
-        lines.push(`Dialogue: 0,${assTime(from)},${assTime(until)},Caption,,0,0,0,,${anchor}${renderGroupText(group, i, style)}`)
+        const span = `${assTime(from)},${assTime(until)},Caption,,0,0,0,,${anchor}`
+        lines.push(`Dialogue: 0,${span}${renderGroupText(group, i, style, 'base', false)}`)
+        // Layer 2 sits above the base (the title uses layer 1). The pop only
+        // plays when the word starts, not again at a layout band boundary.
+        lines.push(`Dialogue: 2,${span}${renderGroupText(group, i, style, 'pop', part === 0)}`)
       }
     }
   })

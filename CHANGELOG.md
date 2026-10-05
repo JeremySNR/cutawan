@@ -15,6 +15,7 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
 ### Improved
 
+- Exported karaoke captions now hold still while the highlight moves from word to word. Previously the highlighted word was scaled up inside the line, which pushed the other words 17-26 pixels sideways on every word change and left it about 9% larger than the preview showed. The word now pops in place, exactly as in the preview, and every other word stays put (measured with `scripts/bench-caption-stability.ts`).
 - The setup wizard no longer shows the unavailable "Claude subscription" card. Claude models can be used through OpenRouter instead.
 
 ## [0.13.0] - 2026-09-25
