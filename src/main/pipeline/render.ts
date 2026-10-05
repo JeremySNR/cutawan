@@ -23,7 +23,7 @@ import { computeZoomEvents, fitZoomEvents, remapZoomEvents, type ZoomEvent } fro
 import { planUploadEncode, type UploadEncodePlan } from '@shared/uploadBudget'
 import { FFMPEG_PATH, probeVideo, runFfmpegWith } from './ffmpeg'
 import { timed } from './timing'
-import { loudnormFilter, measureLoudness, normalisationMode, type LoudnessStats } from './loudness'
+import { STEREO, loudnormFilter, measureLoudness, normalisationMode, type LoudnessStats } from './loudness'
 import { buildAss, fontsDir } from './captions'
 import { fontMetricsForFamily } from '../fonts'
 import { mediaJobs } from './mediaJobs'
@@ -72,9 +72,10 @@ export function speechSafeFade(transcript: Transcript | null, start: number, end
 }
 
 function audioChain(clipDuration: number, loudness: LoudnessStats | null, tailSec = 0): string {
-  // FFmpeg 6 on macOS cannot always infer a layout after loudnorm's resampler.
-  // Exports use stereo AAC; constrain the filter link too, before the fade.
-  const master = `${loudnormFilter(loudness)},aresample=48000,aformat=channel_layouts=stereo`
+  // Normalise the stereo mix the export carries, as it was measured. FFmpeg 6
+  // on macOS cannot always infer a layout after loudnorm's resampler, so the
+  // link is constrained again after it, before the fade.
+  const master = `${STEREO},${loudnormFilter(loudness)},aresample=48000,${STEREO}`
   const fade = Math.min(END_FADE_SEC, Math.max(0, tailSec))
   if (fade < 0.01 || clipDuration <= fade * 3) return master
   const st = (clipDuration - fade).toFixed(3)

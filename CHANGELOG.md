@@ -16,6 +16,7 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 ### Improved
 
 - Exported karaoke captions now hold still while the highlight moves from word to word. Previously the highlighted word was scaled up inside the line, which pushed the other words 17-26 pixels sideways on every word change and left it about 9% larger than the preview showed. The word now pops in place, exactly as in the preview, and every other word stays put (measured with `scripts/bench-caption-stability.ts`).
+- Exports land closer to the -14 LUFS loudness target. Mono recordings (common for podcasts and calls) were measured before being spread to stereo, so they were limited about 3 dB harder than needed and could come out up to 2.4 LU quiet. Clips that need peak limiting are now re-measured after the limiter and topped up, so laughs, claps and plosives no longer pull the whole clip under target. Across the benchmark signals, mean error fell from 1.3 LU (mono) and 0.5 LU (stereo) to 0.3 LU, with true peaks still at or below -2 dBTP (`scripts/bench-loudness.ts`).
 - The setup wizard no longer shows the unavailable "Claude subscription" card. Claude models can be used through OpenRouter instead.
 
 ## [0.13.0] - 2026-09-25

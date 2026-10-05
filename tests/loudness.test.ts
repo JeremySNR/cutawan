@@ -4,7 +4,8 @@ import {
   MAX_GAIN_DB,
   MEASURE_FILTER,
   normalisationMode,
-  parseLoudnormStats
+  parseLoudnormStats,
+  refineLimiterGain
 } from '../src/main/pipeline/loudness'
 
 const STDERR = `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'source.mp4':
@@ -82,7 +83,36 @@ describe('loudnormFilter', () => {
     expect(loudnormFilter(stats)).toContain(`volume=${MAX_GAIN_DB.toFixed(2)}dB`)
   })
 
-  it('measures against the same targets it normalises to', () => {
-    expect(MEASURE_FILTER).toBe('loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json')
+  it('measures the stereo mix against the same targets it normalises to', () => {
+    expect(MEASURE_FILTER).toBe('aformat=channel_layouts=stereo,loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json')
+  })
+})
+
+describe('refineLimiterGain', () => {
+  const limited = { inputI: -24, inputTp: -6, inputLra: 9, inputThresh: -34, targetOffset: 0 }
+  /** A limiter that eats a fixed share of every dB pushed into it. */
+  const limiter = (lossPerDb: number) => async (chain: string): Promise<number> => {
+    const gain = Number(/volume=(-?[\d.]+)dB/.exec(chain)![1])
+    return limited.inputI + gain - lossPerDb * gain
+  }
+
+  it('raises the gain until the limited clip reaches the target', async () => {
+    const refined = await refineLimiterGain(limited, limiter(0.15))
+    // Plain estimate is +10 dB, which the limiter leaves 1.5 LU short.
+    expect(refined.limiterGainDb).toBeGreaterThan(10)
+    const result = await limiter(0.15)(loudnormFilter(refined))
+    expect(Math.abs(result - -14)).toBeLessThan(0.3)
+    expect(loudnormFilter(refined)).toContain('alimiter=')
+  })
+
+  it('keeps the plain gain when the limiter already lands on target', async () => {
+    const refined = await refineLimiterGain(limited, limiter(0))
+    expect(refined.limiterGainDb).toBe(10)
+  })
+
+  it('never exceeds the gain cap and survives a failed measurement', async () => {
+    const silent = { ...limited, inputI: -60 }
+    expect((await refineLimiterGain(silent, limiter(0.5))).limiterGainDb).toBe(MAX_GAIN_DB)
+    expect((await refineLimiterGain(limited, async () => null)).limiterGainDb).toBe(10)
   })
 })

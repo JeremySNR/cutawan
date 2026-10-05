@@ -113,6 +113,11 @@ describe('buildFilterGraph', () => {
     expect(graph.filterComplex).toContain('linear=true,aresample=48000')
   })
 
+  it('normalises the stereo mix it measured, so mono sources are not over-limited', () => {
+    const graph = buildFilterGraph(makeClip(), source, null, 30, null)
+    expect(graph.filterComplex).toContain('aformat=channel_layouts=stereo,loudnorm=I=-14')
+  })
+
   it('gains into a limiter when a linear gain would clip the true peak', () => {
     const graph = buildFilterGraph(makeClip(), source, null, 30, null, {
       loudness: { inputI: -23.4, inputTp: -6.1, inputLra: 9.2, inputThresh: -33.7, targetOffset: 0.3 }
