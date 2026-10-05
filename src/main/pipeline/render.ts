@@ -313,11 +313,24 @@ function reframeGraph(
 }
 
 /**
- * Trim+concat prefix for tightened clips: cuts the kept segments out of the
- * (already -ss seeked, so clip-relative) input and concatenates them.
- * Produces [vcat] and, when audio is present, [acat].
+ * Fade on each side of a tighten join. Cutting audio at an arbitrary sample
+ * leaves a step in the waveform, an audible click wherever music, game sound
+ * or room tone runs under the pause: 12.7x the largest natural step on a
+ * music bed (scripts/bench-tighten-joins.ts). 5ms out and 5ms in removes it
+ * and changes no durations, so picture and captions stay in sync. A
+ * duration-preserving crossfade was measured too: it dips less (-2 to -8 dB
+ * against -12 to -20 dB, for about 10ms) but leaves steps up to 1.5x the
+ * material's own, and longer ones cancel low notes that meet out of phase.
  */
-function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: boolean): string {
+export const JOIN_FADE_SEC = 0.005
+
+/**
+ * Trim+concat prefix for tightened clips: cuts the kept segments out of the
+ * (already -ss seeked, so clip-relative) input and concatenates them, with a
+ * de-click fade at every join (not at the clip's own start or end).
+ * Produces [vcat] and, when audio is present, [acat]. Exported for tests.
+ */
+export function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: boolean): string {
   const parts: string[] = []
   const vLabels: string[] = []
   const aLabels: string[] = []
@@ -327,7 +340,13 @@ function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: bool
     parts.push(`[0:v]trim=start=${s}:end=${e},setpts=PTS-STARTPTS[vs${i}]`)
     vLabels.push(`[vs${i}]`)
     if (hasAudio) {
-      parts.push(`[0:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS[as${i}]`)
+      const fade = Math.min(JOIN_FADE_SEC, (Number(e) - Number(s)) / 4)
+      const fades: string[] = []
+      if (fade > 0 && i > 0) fades.push(`,afade=t=in:st=0:d=${fade.toFixed(4)}`)
+      if (fade > 0 && i < segments.length - 1) {
+        fades.push(`,afade=t=out:st=${(Number(e) - Number(s) - fade).toFixed(4)}:d=${fade.toFixed(4)}`)
+      }
+      parts.push(`[0:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS${fades.join('')}[as${i}]`)
       aLabels.push(`[as${i}]`)
     }
   })

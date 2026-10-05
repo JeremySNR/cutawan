@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFilterGraph, speechSafeFade } from '../src/main/pipeline/render'
+import { buildFilterGraph, speechSafeFade, tightenGraph } from '../src/main/pipeline/render'
 import { makeTranscript } from './helpers'
 import { DEFAULT_BRAND_COLORS, DEFAULT_CAPTION_STYLE_ID } from '@shared/captionStyles'
 import type { BrandingSettings, Clip, VideoInfo } from '@shared/types'
@@ -243,5 +243,15 @@ describe('buildFilterGraph', () => {
       fontsDirPath: '/custom/fonts'
     })
     expect(graph.filterComplex).toContain("fontsdir='/custom/fonts'")
+  })
+
+  it('fades audio briefly at every tighten join, never at the clip edges', () => {
+    const graph = tightenGraph([{ start: 10, end: 12 }, { start: 13, end: 15.5 }, { start: 16, end: 17 }], 10, true)
+    expect(graph).toContain('[0:a]atrim=start=0.000:end=2.000,asetpts=PTS-STARTPTS,afade=t=out:st=1.9950:d=0.0050[as0]')
+    expect(graph).toContain('atrim=start=3.000:end=5.500,asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.0050,afade=t=out:st=2.4950:d=0.0050[as1]')
+    expect(graph).toContain('atrim=start=6.000:end=7.000,asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.0050[as2]')
+    // Video joins stay hard cuts and nothing changes length.
+    expect(graph).not.toMatch(/\[0:v\][^;]*fade/)
+    expect(graph).toContain('concat=n=3:v=0:a=1[acat]')
   })
 })
