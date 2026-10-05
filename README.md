@@ -1,14 +1,15 @@
 <p align="center">
-  <img src=".github/assets/cutawan-hero.png" alt="Cutawan: turn long videos into viral clips on your desktop" width="100%" />
+  <img src=".github/assets/cutawan-hero.png" alt="Cutawan, the free open-source Opus Clip alternative: turn long videos into viral clips on your desktop" width="100%" />
 </p>
 
-<h3 align="center">Turn long videos into captioned shorts on your desktop.</h3>
+<h3 align="center">The free, open-source Opus Clip alternative that runs on your desktop.</h3>
 
 <p align="center"><a href="#download-and-get-started"><strong>Download for Windows, macOS or Linux</strong></a> &nbsp;·&nbsp; <a href="https://cutawan.xyz">website</a> &nbsp;·&nbsp; <a href="#faq">faq</a></p>
 
 <p align="center">
-  Turn podcasts, webinars, streams and interviews into ready-to-post vertical clips.<br/>
-  AI-picked moments, virality scores, animated captions, auto zoom and speaker-aware reframing.
+  Turn podcasts, webinars, streams and interviews into ready-to-post vertical clips for TikTok, Reels and YouTube Shorts.<br/>
+  AI-picked moments, virality scores, animated captions, auto zoom and speaker-aware reframing.<br/>
+  A normal installer: no Docker, no watermark, no per-minute credits.
 </p>
 
 <p align="center">
@@ -20,21 +21,30 @@
   <a href="https://github.com/JeremySNR/cutawan/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome" /></a>
 </p>
 
+<p align="center"><em>If Cutawan saves you an editing session, a ⭐ helps other creators find it.</em></p>
+
 ---
 
 ## Download and get started
 
-1. **[Download the latest release](https://github.com/JeremySNR/cutawan/releases/latest).** Choose the Windows `.exe` installer, macOS `.dmg`, or Linux `.AppImage` under **Assets**. You do not need Node.js or a source checkout to use the app.
-2. **Set up your connection.** In v0.10.0 and newer, the first-run wizard offers **ChatGPT sign-in** via Codex for AI clip finding with local transcription, an **OpenAI-compatible API** for separately billed analysis, **OpenRouter** for any model OpenRouter lists with one key, or **Local captions only** to caption a whole video without an AI connection. [Setup requirements and choices](docs/getting-started.md) are explained step by step. You can also explore the editor before setting up a connection.
-3. **Import a video or paste a supported URL.** Choose **Find viral clips** to review suggested moments, or **Caption whole video** to make one captioned edit. Adjust the trim, captions and framing, then export an MP4.
+1. **[Download the latest release](https://github.com/JeremySNR/cutawan/releases/latest).** Pick the Windows `.exe`, macOS `.dmg` (Apple Silicon) or Linux `.AppImage` under **Assets**. No Node.js, Python or Docker needed to start.
+2. **Choose how the AI runs.** The first-run wizard offers **ChatGPT sign-in** (via Codex, with local transcription), an **OpenAI-compatible API key**, **OpenRouter** (any model it lists, including Claude and Gemini), or **Local captions only** with no AI connection at all.
+3. **Import a video or paste a link.** Choose **Find viral clips** to review AI-suggested moments, or **Caption whole video** for one captioned vertical edit. Adjust trim, captions and framing, then export an MP4.
 
-The ChatGPT/Codex option is a beta integration with your plan's Codex allowance, not an included OpenAI API. It needs the Codex CLI signed in with ChatGPT and Python 3.10+; the wizard can install local faster-whisper and a speech model after you choose it. AI clip finding still needs either Codex or an API connection. Builds before v0.10.0 do not show the wizard; configure the connection in **Settings → General → AI connection** instead.
+<details>
+<summary><strong>Setup notes</strong> (ChatGPT/Codex route, macOS first launch, older builds)</summary>
 
-The macOS download supports **Apple Silicon (M1 or newer)**. It is currently unsigned and not notarized, so macOS may require **System Settings → Privacy & Security → Open Anyway** after the first launch attempt. Intel Macs do not currently have a published installer. [Platform-specific install notes](docs/getting-started.md#install-the-app) cover the available builds.
+- The ChatGPT/Codex option is a beta integration with your plan's Codex allowance, not an included OpenAI API. It needs the Codex CLI signed in with ChatGPT and Python 3.10+; the wizard can install local faster-whisper and a speech model after you choose it. AI clip finding still needs either Codex or an API connection.
+- The macOS download supports **Apple Silicon (M1 or newer)**. It is currently unsigned and not notarized, so macOS may require **System Settings → Privacy & Security → Open Anyway** after the first launch attempt. Intel Macs do not currently have a published installer.
+- Builds before v0.10.0 do not show the wizard; configure the connection in **Settings → General → AI connection** instead.
+
+[Setup requirements and choices](docs/getting-started.md) and [platform-specific install notes](docs/getting-started.md#install-the-app) are explained step by step. You can also explore the editor before setting up a connection.
+
+</details>
 
 ## Why Cutawan instead of Opus Clip?
 
-Opus Clip is great, but it costs a subscription, runs in the cloud, and uploads your footage. Cutawan is a free desktop app: connect an OpenAI-compatible API, use ChatGPT sign-in through Codex with local Whisper, or caption whole videos entirely locally.
+Opus Clip is great, but it costs a subscription, runs in the cloud, and uploads your footage. Cutawan is a free desktop app: connect an OpenAI-compatible API or OpenRouter, use ChatGPT sign-in through Codex with local Whisper, or caption whole videos entirely locally.
 
 |                          | **Cutawan**                                   | Opus Clip (and similar SaaS)      |
 | ------------------------ | ----------------------------------------------- | --------------------------------- |
@@ -42,8 +52,10 @@ Opus Clip is great, but it costs a subscription, runs in the cloud, and uploads 
 | Your footage             | Stays on your machine. Speech can run locally; analysis sends transcripts and sampled frames to your chosen connection | Uploaded to their cloud |
 | Processing minutes       | Unlimited                                       | Capped per plan                   |
 | Watermark                | Your own logo, or none                          | Removed on paid tiers             |
-| Models                   | Your choice (GPT-5 series, or the budget legacy option) | Theirs                    |
+| Models                   | Your choice (OpenAI, or any OpenRouter model)  | Theirs                            |
 | Extensible               | Fork it, script it, PR it                       | Closed                            |
+
+**Compared with other open-source clippers:** many are self-hosted web apps or Python scripts that need Docker or a Python environment, and often several API keys, before the first clip. Cutawan is a desktop installer with an in-app setup wizard, on-device active speaker detection, and a captions-only mode that needs no AI connection. The website keeps a [sourced comparison of open-source Opus Clip alternatives](https://cutawan.xyz/open-source-ai-video-clippers/).
 
 On the default API route, a typical estimate is **~$0.36/hour of video** for Whisper transcription plus a few cents of LLM analysis with `gpt-5.4-mini`; actual API charges depend on usage and current pricing. The ChatGPT/Codex route uses plan allowance and local speech transcription instead.
 
