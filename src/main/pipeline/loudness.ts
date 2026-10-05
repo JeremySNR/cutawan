@@ -25,12 +25,29 @@ export interface LoudnessStats {
   inputLra: number
   inputThresh: number
   targetOffset: number
+  /**
+   * Gain into the limiter, when the limiter path was measured through. The
+   * limiter takes loudness off the peaks it catches, so the plain
+   * `TARGET_I - inputI` gain lands short on spiky speech; this is that gain
+   * raised until the limited result reaches the target.
+   */
+  limiterGainDb?: number
 }
 
 const TARGETS = `I=${TARGET_I}:TP=${TARGET_TP}:LRA=${TARGET_LRA}`
 
+/**
+ * Exports are stereo, so loudness is measured and normalised on the stereo
+ * mix rather than the source layout. A mono source is spread to both channels
+ * 3 dB down each; measuring the mono peak instead sent ordinary mono speech
+ * down the limiter path and limited it about 3 dB harder than needed, so it
+ * landed up to 2.4 LU under target (scripts/bench-loudness.ts). Surround
+ * sources are judged on the same downmix the export carries.
+ */
+export const STEREO = 'aformat=channel_layouts=stereo'
+
 /** The measurement filter, for a first pass whose output is discarded. */
-export const MEASURE_FILTER = `loudnorm=${TARGETS}:print_format=json`
+export const MEASURE_FILTER = `${STEREO},loudnorm=${TARGETS}:print_format=json`
 
 /**
  * Most gain the limiter path will apply. A source this quiet is broken
@@ -73,9 +90,39 @@ export function loudnormFilter(stats: LoudnessStats | null): string {
       `:offset=${f(stats.targetOffset)}:linear=true`
     )
   }
-  const gain = Math.min(MAX_GAIN_DB, gainDb)
+  return limiterChain(Math.min(MAX_GAIN_DB, stats.limiterGainDb ?? gainDb))
+}
+
+function limiterChain(gainDb: number): string {
   const ceiling = Math.pow(10, LIMITER_CEILING_DB / 20)
-  return `volume=${f(gain)}dB,alimiter=limit=${ceiling.toFixed(4)}:attack=5:release=50:level=false`
+  return `volume=${gainDb.toFixed(2)}dB,alimiter=limit=${ceiling.toFixed(4)}:attack=5:release=50:level=false`
+}
+
+/** Passes allowed to correct the limiter-path gain; each is audio-only. */
+const LIMITER_PASSES = 2
+/** Close enough to the target to stop refining. */
+const LIMITER_TOLERANCE_LU = 0.3
+
+/**
+ * Raise the limiter-path gain until the limited result reaches the target:
+ * measure what the limiter actually leaves, add the shortfall, repeat. Each
+ * extra dB drives the limiter harder, so one pass under-corrects slightly;
+ * two get within a few tenths on spiky material. Gains only go up from the
+ * plain estimate and stay under MAX_GAIN_DB. Pure: `measure` runs the pass.
+ */
+export async function refineLimiterGain(
+  stats: LoudnessStats,
+  measure: (chain: string) => Promise<number | null>
+): Promise<LoudnessStats> {
+  let gain = Math.min(MAX_GAIN_DB, TARGET_I - stats.inputI)
+  for (let pass = 0; pass < LIMITER_PASSES; pass++) {
+    const limited = await measure(limiterChain(gain))
+    if (limited === null) break
+    const shortfall = TARGET_I - limited
+    if (shortfall < LIMITER_TOLERANCE_LU) break
+    gain = Math.min(MAX_GAIN_DB, gain + shortfall)
+  }
+  return { ...stats, limiterGainDb: gain }
 }
 
 /** Which path loudnormFilter takes for a measurement; exported for tests and logs. */
@@ -150,7 +197,25 @@ export async function measureLoudness(
       ],
       { signal }
     )
-    return parseLoudnormStats(stderr)
+    const stats = parseLoudnormStats(stderr)
+    if (!stats || normalisationMode(stats) !== 'limited') return stats
+    return await refineLimiterGain(stats, async (chain) => {
+      const pass = await runBinaryFull(
+        FFMPEG_PATH,
+        [
+          '-hide_banner',
+          '-nostats',
+          '-ss', startSec.toFixed(3),
+          '-t', durationSec.toFixed(3),
+          '-i', sourcePath,
+          '-vn',
+          '-af', `${STEREO},${chain},loudnorm=${TARGETS}:print_format=json`,
+          '-f', 'null', '-'
+        ],
+        { signal }
+      )
+      return parseLoudnormStats(pass.stderr)?.inputI ?? null
+    })
   } catch (err) {
     if (signal?.aborted) throw err
     console.error('Loudness measurement failed; using single-pass normalisation:', err)
