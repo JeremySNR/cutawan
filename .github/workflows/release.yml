@@ -129,7 +129,13 @@ jobs:
       - id: version
         shell: bash
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-      - uses: vedantmgoyal9/winget-releaser@v2
+      # Pinned to a commit rather than @v2: this action is handed
+      # WINGET_TOKEN (a PAT that can open PRs on a fork of winget-pkgs), and
+      # @v2 is a moving tag — it currently resolves to a commit pushed
+      # 2026-10-07 while the v2 release dates from 2025-01-27, so a tag move
+      # would run unreviewed code with that token. Bump deliberately:
+      #   gh api repos/vedantmgoyal9/winget-releaser/commits/v2 -q .sha
+      - uses: vedantmgoyal9/winget-releaser@f29ed1ffd34f91223a2aebaa71beaab0901ff9fd # v2
         with:
           identifier: ${{ vars.WINGET_PACKAGE_ID }}
           installers-regex: '\.exe$'
