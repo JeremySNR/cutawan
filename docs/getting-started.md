@@ -9,7 +9,7 @@ Download the current build from [GitHub Releases](https://github.com/JeremySNR/c
 | Platform | Choose | First launch |
 | --- | --- | --- |
 | Windows | `.exe` installer | Run the installer. The build is not code-signed yet, so Windows may show a SmartScreen warning; verify that you downloaded it from this repository before proceeding. |
-| macOS, Apple Silicon (M1 or newer) | `arm64.dmg` | Move Cutawan to Applications. The build is not signed or notarised yet. After trying to open it, macOS may require **System Settings → Privacy & Security → Open Anyway**. Intel Macs do not currently have a published installer. |
+| macOS, Apple Silicon (M1 or newer) | `arm64.dmg` | Move Cutawan to Applications. The build is not signed with an Apple Developer ID or notarised yet. After trying to open it, macOS may require **System Settings → Privacy & Security → Open Anyway**. If macOS says Cutawan "is damaged" (releases before v0.14.0), run `xattr -cr /Applications/Cutawan.app` in Terminal and open it again. Intel Macs do not currently have a published installer. |
 | Linux | `.AppImage` | Make it executable, then run it. For example, in a terminal: `chmod +x Cutawan*.AppImage` and `./Cutawan*.AppImage`. |
 
 Signing and notarisation are planned. Until then, only download installers from the [official release page](https://github.com/JeremySNR/cutawan/releases/latest), not a reposted copy. Builds before v0.10.0 do not have the first-run wizard; use **Settings → General → AI connection** for setup instead.

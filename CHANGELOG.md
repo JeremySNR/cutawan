@@ -17,6 +17,10 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
 - The setup wizard no longer shows the unavailable "Claude subscription" card. Claude models can be used through OpenRouter instead.
 
+### Fixed
+
+- The macOS download no longer opens with "Cutawan is damaged and can't be opened". The app is now ad-hoc signed, so macOS shows its usual unidentified-developer prompt and **System Settings → Privacy & Security → Open Anyway** works. It is still not signed with an Apple Developer ID or notarised. For an earlier release, run `xattr -cr /Applications/Cutawan.app` once in Terminal.
+
 ## [0.13.0] - 2026-09-25
 
 ### Added

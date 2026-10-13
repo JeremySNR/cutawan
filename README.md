@@ -35,7 +35,7 @@
 <summary><strong>Setup notes</strong> (ChatGPT/Codex route, macOS first launch, older builds)</summary>
 
 - The ChatGPT/Codex option is a beta integration with your plan's Codex allowance, not an included OpenAI API. It needs the Codex CLI signed in with ChatGPT and Python 3.10+; the wizard can install local faster-whisper and a speech model after you choose it. AI clip finding still needs either Codex or an API connection.
-- The macOS download supports **Apple Silicon (M1 or newer)**. It is currently unsigned and not notarized, so macOS may require **System Settings → Privacy & Security → Open Anyway** after the first launch attempt. Intel Macs do not currently have a published installer.
+- The macOS download supports **Apple Silicon (M1 or newer)**. It is not yet signed with an Apple Developer ID or notarized, so macOS may require **System Settings → Privacy & Security → Open Anyway** after the first launch attempt. Intel Macs do not currently have a published installer.
 - Builds before v0.10.0 do not show the wizard; configure the connection in **Settings → General → AI connection** instead.
 
 [Setup requirements and choices](docs/getting-started.md) and [platform-specific install notes](docs/getting-started.md#install-the-app) are explained step by step. You can also explore the editor before setting up a connection.
@@ -263,8 +263,11 @@ footage you did not create, and note that AI B-roll pulls from Wikipedia and
 Openverse, whose images carry their own licences.
 
 **macOS says the app cannot be opened. Why?**
-The macOS builds are not code-signed yet, so Gatekeeper may block first
-launch. After trying to open the app, use **System Settings → Privacy & Security → Open Anyway**.
+The macOS builds are not signed with an Apple Developer ID or notarised yet, so
+Gatekeeper may block first launch. After trying to open the app, use
+**System Settings → Privacy & Security → Open Anyway**. If macOS instead says
+Cutawan "is damaged and can't be opened" (releases before v0.14.0), run
+`xattr -cr /Applications/Cutawan.app` in Terminal, then open it again.
 Signing and notarisation are wanted; see
 [CONTRIBUTING.md](CONTRIBUTING.md) if you can help.
 

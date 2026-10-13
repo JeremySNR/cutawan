@@ -52,6 +52,7 @@
     "appId": "org.cutawan.app",
     "productName": "Cutawan",
     "icon": "build/icon.png",
+    "afterPack": "./scripts/adhoc-sign-mac.mjs",
     "directories": {
       "output": "release"
     },
