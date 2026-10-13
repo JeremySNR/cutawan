@@ -19,6 +19,32 @@ describe('buildAss', () => {
     expect(events.length).toBe(4)
   })
 
+  it('pops the active word on its own layer so the other words never move', () => {
+    const ass = buildAss(transcript, base)
+    const baseLayer = ass.split('\n').filter((l) => l.startsWith('Dialogue: 0,'))
+    const popLayer = ass.split('\n').filter((l) => l.startsWith('Dialogue: 2,'))
+    expect(popLayer).toHaveLength(baseLayer.length)
+    // Scaling a word re-flows a centred libass line, so the layer that draws
+    // the other words never scales anything.
+    for (const line of baseLayer) expect(line).not.toMatch(/\\fsc|\\t\(/)
+    // Both layers carry the same words and anchor, so they share one layout.
+    const strip = (l: string): string => l.slice(l.indexOf(',', 12)).replace(/\{[^}]*\}/g, '')
+    baseLayer.forEach((line, i) => expect(strip(popLayer[i])).toBe(strip(line)))
+    // Second word active: hidden in the base layer, the only visible word on top.
+    expect(baseLayer[1]).toMatch(/\{\\c&H00D4FF&\\alpha&HFF&\}BRAVE/)
+    expect(popLayer[1]).toContain('{\\alpha&HFF&}HELLO')
+    expect(popLayer[1]).toMatch(/\\fscx94\\fscy94\\t\(0,90,0\.5,\\fscx100\\fscy100\)\}BRAVE/)
+  })
+
+  it('plays the pop once per word, not again at a layout boundary', () => {
+    const ass = buildAss(transcript, { ...base, positionRanges: [{ start: 0.25, end: 0.4, positionY: 0.38 }] })
+    const pops = ass.split('\n').filter((l) => l.startsWith('Dialogue: 2,'))
+    // The first word is split in three by the band; only its first part pops.
+    expect(pops[0]).toContain('\\t(')
+    expect(pops[1]).not.toContain('\\t(')
+    expect(pops[2]).not.toContain('\\t(')
+  })
+
   it('splits a caption event at a layout boundary to keep preview and export positions aligned', () => {
     const ass = buildAss(transcript, { ...base, positionRanges: [{ start: .25, end: .4, positionY: .38 }] })
     const events = ass.split('\n').filter(l => l.startsWith('Dialogue: 0,'))
