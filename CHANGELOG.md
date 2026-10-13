@@ -6,7 +6,7 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
-## [Unreleased]
+## [0.14.0] - 2026-10-13
 
 ### Added
 

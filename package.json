@@ -1,6 +1,6 @@
 {
   "name": "cutawan",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Open-source AI video clipper — turn long videos into viral short clips (an Opus Clip alternative)",
   "main": "out/main/index.js",
   "author": "Cutawan Contributors",
