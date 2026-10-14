@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '../../../design-system/foundations.css';
 
 /* Bundled caption fonts — same files libass burns into exports. */
 @font-face {
@@ -130,4 +131,18 @@ input[type='range']::-webkit-slider-thumb {
 /* Mirrors the ASS \fad entrance on the burned-in hook card. */
 .hook-in {
   animation: hookIn 220ms ease-out;
+}
+
+
+/* Family accessibility foundation. Caption/video motion is authored content. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--family-color-neutral-dark-text);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, a, input, select, textarea, [role='tab']) {
+    transition-duration: 0ms !important;
+    scroll-behavior: auto;
+  }
 }
