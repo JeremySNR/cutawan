@@ -35,15 +35,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install exact dependencies
-        run: npm ci
-      - name: Install Intel-compatible ONNX Runtime
+      - name: Resolve Intel-compatible ONNX Runtime before clean install
         # ONNX Runtime Node 1.24+ omitted the macOS x86_64 native binding.
-        # Keep upstream dependency versions untouched on other platforms.
+        # Regenerate only this runner's local dependency lock, not the source fork.
         shell: bash
         run: |
           set -euo pipefail
-          npm install --no-save --package-lock=false --no-audit --no-fund onnxruntime-node@1.23.2
+          npm pkg set 'dependencies.onnxruntime-node=1.23.2'
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Install pinned Intel dependencies
+        run: npm ci
+      - name: Verify Intel ONNX Runtime native binding
+        shell: bash
+        run: |
+          set -euo pipefail
           test -f node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node
           node -e "require('onnxruntime-node'); console.log('Intel ONNX binding loaded')"
       - name: Check TypeScript
