@@ -37,6 +37,15 @@ jobs:
           cache: npm
       - name: Install exact dependencies
         run: npm ci
+      - name: Install Intel-compatible ONNX Runtime
+        # ONNX Runtime Node 1.24+ omitted the macOS x86_64 native binding.
+        # Keep upstream dependency versions untouched on other platforms.
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --package-lock=false --no-audit --no-fund onnxruntime-node@1.23.2
+          test -f node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node
+          node -e "require('onnxruntime-node'); console.log('Intel ONNX binding loaded')"
       - name: Check TypeScript
         run: npm run typecheck
       - name: Build Intel x64 .app, .dmg and .zip
@@ -55,6 +64,7 @@ jobs:
           file "$APP/Contents/MacOS/Cutawan" | grep -q 'x86_64'
           file "$APP/Contents/Frameworks/Electron Framework.framework/Electron Framework" | grep -q 'x86_64'
           codesign --verify --deep --strict "$APP"
+          test -f "$APP/Contents/Resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node"
           test -n "$(find release -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "$(find release -maxdepth 1 -name '*.zip' -print -quit)"
       - name: Exercise packaged pipeline and UI
