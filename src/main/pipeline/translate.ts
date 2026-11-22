@@ -124,8 +124,9 @@ export function translationWarnings(source: string, text: string, terms: string[
 
 /**
  * Land the model's numbered lines on the sentences. Lines are matched by
- * number. A reply whose numbering is off but whose count is exact (numbered
- * from 0, or continuing from an example) is matched by position instead.
+ * number, in whatever order they come. A reply whose count is exact but
+ * whose numbers do not all fall within 1..count (numbered from 0, or
+ * continuing from an example) is matched by position instead.
  * Extra lines and numbers out of range are ignored; a skipped or empty line
  * keeps the original sentence and is marked untranslated.
  */
@@ -141,14 +142,15 @@ export function landTranslation(
     }))
   const byNumber = new Map<number, string>()
   const count = sentences.length
-  const numbersExact = replies.length > 0 &&
-    replies.every((r, i) => r.n === i + 1) && replies.length <= count
-  if (!numbersExact && replies.length === count) {
-    // Same count, numbering off: trust the order.
+  const inRange = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= count
+  if (replies.length === count && !replies.every((r) => inRange(r.n))) {
+    // Same count, numbered from elsewhere: trust the order.
     replies.forEach((r, i) => byNumber.set(i + 1, r.text))
   } else {
+    // Numbers in range are trusted even out of order: "2, 1, 3" is a swap,
+    // and a repeated number leaves the line it skipped untranslated.
     for (const reply of replies) {
-      if (!Number.isInteger(reply.n) || reply.n < 1 || reply.n > count || byNumber.has(reply.n)) continue
+      if (!inRange(reply.n) || byNumber.has(reply.n)) continue
       byNumber.set(reply.n, reply.text)
     }
   }
