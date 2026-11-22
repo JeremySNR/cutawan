@@ -20,5 +20,5 @@
       "@/*": ["src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/index.d.ts", "src/renderer/src/vite-env.d.ts"]
+  "include": ["src/renderer/**/*", "src/shared/**/*", "src/preload/index.d.ts", "src/renderer/src/vite-env.d.ts", "tests/renderer/**/*"]
 }
