@@ -203,8 +203,11 @@ const EDGE_DROP_DB = 6
 const SMOOTH_FRAMES = 3
 /** At most one reaction per this many seconds of source on average; strongest kept. */
 export const REACTION_SPACING_SEC = 20
-/** Dynamic range (dB above reference) that maps to strength 1. */
-const FULL_STRENGTH_DB = 30
+/**
+ * Strength divides by the source's top score, or this many dB if the top is
+ * lower: the synthetic gap events scored 12–16 dB, over-speech laughter 4.6.
+ */
+const STRENGTH_FLOOR_DB = 10
 
 export interface ReactionContext {
   durationSec: number
@@ -422,22 +425,22 @@ export function detectReactions(features: ReactionFeatures, context: ReactionCon
     if (kind) reaction.kind = kind
   }
 
-  // Strength: dB of excess on a 0..30 dB scale, lengthened reactions a little
+  // Score: dB of excess over the reference, lengthened reactions a little
   // stronger (a 3 s laugh outweighs a 0.2 s click at the same level).
   for (const reaction of reactions) {
     const lengthBonus = Math.min(1, Math.log2(1 + (reaction.end - reaction.start)) / 2)
-    reaction.score = Math.min(1, reaction.score / FULL_STRENGTH_DB) * (0.7 + 0.3 * lengthBonus)
+    reaction.score *= 0.7 + 0.3 * lengthBonus
   }
   const cap = Math.max(1, Math.floor(context.durationSec / REACTION_SPACING_SEC))
   const kept = reactions.sort((a, b) => b.score - a.score).slice(0, cap)
-  const top = Math.max(...kept.map(r => r.score), 0.5)
+  // Strength is relative to this source's strongest reaction, but a source
+  // whose loudest reaction is itself weak keeps an absolute scale.
+  const top = Math.max(...kept.map(r => r.score), STRENGTH_FLOOR_DB)
   return kept
     .map(({ score, ...r }) => ({
       ...r,
       start: Math.round(r.start * 100) / 100,
       end: Math.round(Math.min(context.durationSec || r.end, r.end) * 100) / 100,
-      // Relative to this source's strongest, but never inflating a source
-      // whose loudest reaction is itself weak (top < 0.5 keeps its scale).
       strength: Math.round(Math.min(1, score / top) * 100) / 100
     }))
     .sort((a, b) => a.start - b.start)
@@ -474,9 +477,11 @@ const MUSIC_FLATNESS = 0.06
 
 /** A kind only when the features clearly say so; otherwise 'other'. */
 export function classifyReaction(features: ReactionFeatures, from: number, to: number): AudioReaction['kind'] {
+  const duration = (to - from) * features.hopSec
+  // Statistics over the interior: edge frames straddle the onset and decay.
+  if (to - from > 6) { from++; to-- }
   const n = to - from
   if (n <= 0) return 'other'
-  const duration = n * features.hopSec
   let flat = 0, high = 0, mean = 0, maxFlux = 0
   for (let i = from; i < to; i++) {
     flat += features.flatness[i]; high += features.highShare[i]; mean += features.levelDb[i]
