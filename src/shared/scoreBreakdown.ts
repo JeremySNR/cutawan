@@ -47,6 +47,58 @@ export function scoreFromParts(parts: ScoreBreakdown): number {
   return Math.max(0, Math.min(99, SCORE_PARTS.reduce((sum, part) => sum + parts[part.key], 0)))
 }
 
+/**
+ * Rubric parts rescaled to a new total: each part keeps its share of the
+ * total as far as its own maximum allows, the whole numbers sum exactly to
+ * the (clamped, rounded) total, and no part leaves its scale. Used when a
+ * later, comparative judgement replaces a clip's score, so the breakdown a
+ * creator reads still adds up to the number on the card. A part the model
+ * scored 0 stays 0 unless the total cannot be reached without it. `visual`
+ * is not a rubric part and is carried over unchanged.
+ */
+export function rescaleScoreParts(parts: ScoreBreakdown, total: number): ScoreBreakdown {
+  const capacity = SCORE_PARTS.reduce((sum, part) => sum + part.max, 0)
+  const target = Math.max(0, Math.min(99, capacity, Math.round(Number.isFinite(total) ? total : 0)))
+  const exact = new Map<ScorePart['key'], number>()
+  // Water-filling: share what remains among the parts that have not hit their
+  // maximum, in proportion to their weights, until none overflows.
+  let free = [...SCORE_PARTS]
+  let remaining = target
+  const weightOf = (part: ScorePart, byScore: boolean): number => (byScore ? Math.max(0, parts[part.key]) : part.max)
+  while (free.length > 0 && remaining > 1e-9) {
+    // Weight by the current scores; when the free parts are all 0, by their scales.
+    const byScore = free.some((part) => parts[part.key] > 0)
+    const weight = free.reduce((sum, part) => sum + weightOf(part, byScore), 0)
+    const over = free.filter((part) => (remaining * weightOf(part, byScore)) / weight > part.max)
+    if (over.length === 0) {
+      for (const part of free) exact.set(part.key, (remaining * weightOf(part, byScore)) / weight)
+      remaining = 0
+      break
+    }
+    for (const part of over) {
+      exact.set(part.key, part.max)
+      remaining -= part.max
+    }
+    free = free.filter((part) => !over.includes(part))
+  }
+  // Whole numbers: round down, then hand the leftover points to the largest
+  // remainders that still have room on their scale.
+  const out = { ...parts }
+  for (const part of SCORE_PARTS) out[part.key] = Math.floor(exact.get(part.key) ?? 0)
+  let leftover = target - SCORE_PARTS.reduce((sum, part) => sum + out[part.key], 0)
+  const byRemainder = [...SCORE_PARTS].sort((a, b) =>
+    ((exact.get(b.key) ?? 0) % 1) - ((exact.get(a.key) ?? 0) % 1))
+  while (leftover > 0) {
+    const part = byRemainder.find((p) => out[p.key] < p.max)
+    if (!part) break
+    out[part.key]++
+    leftover--
+    // Each part takes at most one extra point per round, largest remainder first.
+    byRemainder.push(byRemainder.splice(byRemainder.indexOf(part), 1)[0])
+  }
+  return out
+}
+
 /** Share of a part's scale that was earned, 0..1. */
 export function scorePartFraction(parts: ScoreBreakdown, part: ScorePart): number {
   return part.max > 0 ? parts[part.key] / part.max : 0

@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  applyComparativeScores,
   applyRefinedEnding,
   applyRefinedStart,
+  checkClipOpenings,
   dedupeClips,
+  penaliseHook,
+  playedText,
+  reviewedTime,
   formatTranscriptForModel,
   planAnalysisWindows,
   snapClipEnd,
@@ -220,16 +225,22 @@ describe('snapClipStart / snapClipEnd', () => {
 })
 
 describe('formatTranscriptForModel', () => {
-  it('writes one sentence per line with start/end and delivery tags', () => {
+  it('writes one numbered sentence per line with start/end and delivery tags', () => {
     const t = makeTranscript(['Loud one.', 'Middle one.', 'Quiet one.'])
     t.segments[0].energy = 0.95
     t.segments[1].energy = 0.5
     t.segments[2].energy = 0.1
     const lines = formatTranscriptForModel(transcriptSentences(t)).split('\n')
     expect(lines).toHaveLength(3)
-    expect(lines[0]).toMatch(/^\[0\.0s - 0\.7s\] Loud one\. \[delivery: energetic\]$/)
+    expect(lines[0]).toMatch(/^#0 \[0\.0s - 0\.7s\] Loud one\. \[delivery: energetic\]$/)
+    expect(lines[2]).toMatch(/^#2 \[/)
     expect(lines[1]).not.toContain('[delivery')
     expect(lines[2]).toContain('[delivery: subdued]')
+  })
+
+  it('numbers each line by its place in the whole transcript, so a window keeps the same numbers', () => {
+    const sentences = transcriptSentences(makeTranscript(['One here.', 'Two here.', 'Three here.', 'Four here.']))
+    expect(formatTranscriptForModel(sentences.slice(2)).split('\n').map((l) => l.split(' ')[0])).toEqual(['#2', '#3'])
   })
 })
 
@@ -285,3 +296,124 @@ describe('planAnalysisWindows', () => {
     expect(windows.length).toBeLessThan(Math.ceil(later.durationSec / (12 * 60 - 130)))
   })
 })
+
+describe('reviewedTime', () => {
+  const sentences = transcriptSentences(makeTranscript(['One here now.', 'Two here now.', 'Three here now.']))
+  const tagged = new Map(sentences.slice(1).map((s) => [s.index, s]))
+
+  it('maps a tagged line number to its start or end', () => {
+    expect(reviewedTime(2, undefined, tagged, 'end')).toBe(sentences[2].end)
+    expect(reviewedTime('#1', undefined, tagged, 'start')).toBe(sentences[1].start)
+  })
+
+  it('refuses a line that was not tagged for the clip rather than snapping to one', () => {
+    expect(reviewedTime(0, 12.3, tagged, 'end')).toBeNull()
+    expect(reviewedTime(7, undefined, tagged, 'end')).toBeNull()
+    expect(reviewedTime(1.5, undefined, tagged, 'end')).toBeNull()
+    expect(reviewedTime(1, undefined, undefined, 'end')).toBeNull()
+  })
+
+  it('falls back to seconds only when no line number was given', () => {
+    expect(reviewedTime(undefined, 12.3, tagged, 'end')).toBe(12.3)
+    expect(reviewedTime(null, 'soon', tagged, 'end')).toBeNull()
+  })
+})
+
+describe('penaliseHook', () => {
+  it('lowers the hook part and recomputes the total from the parts', () => {
+    const c = { ...clip('a', 0, 20, 60), scoreBreakdown: { hook: 5, emotion: 20, value: 15, structure: 10, shareability: 5, visual: 80 } }
+    const out = penaliseHook(c, 8)
+    expect(out.scoreBreakdown).toEqual({ hook: 0, emotion: 20, value: 15, structure: 10, shareability: 5, visual: 80 })
+    expect(out.viralityScore).toBe(50)
+  })
+
+  it('lowers the total itself when there are no parts', () => {
+    expect(penaliseHook(clip('a', 0, 20, 60), 8).viralityScore).toBe(52)
+    expect(penaliseHook(clip('a', 0, 20, 3), 8).viralityScore).toBe(0)
+  })
+})
+
+describe('applyComparativeScores', () => {
+  const parts = { hook: 20, emotion: 10, value: 10, structure: 10, shareability: 5 }
+  const clips = [
+    { ...clip('a', 0, 20, 55), scoreBreakdown: parts },
+    { ...clip('b', 30, 50, 50), scoreBreakdown: parts },
+    clip('c', 60, 80, 45)
+  ]
+
+  it('replaces totals, rescales parts to match, and re-sorts', () => {
+    const out = applyComparativeScores(clips, [{ index: 0, score: 30 }, { index: 1, score: 81.4 }, { index: 2, score: 60 }])
+    expect(out.map((c) => [c.id, c.viralityScore])).toEqual([['b', 81], ['c', 60], ['a', 30]])
+    const b = out[0].scoreBreakdown!
+    expect(b.hook + b.emotion + b.value + b.structure + b.shareability).toBe(81)
+    expect(out[1].scoreBreakdown).toBeUndefined()
+  })
+
+  it('keeps the score of a clip the model left out or scored with nonsense', () => {
+    const out = applyComparativeScores(clips, [
+      { index: 1, score: 'high' }, { index: 7, score: 90 }, { index: 2.5, score: 90 }, { index: 2, score: 140 },
+      // A second verdict for the same clip is ignored.
+      { index: 2, score: 1 }
+    ])
+    expect(out.map((c) => [c.id, c.viralityScore])).toEqual([['c', 99], ['a', 55], ['b', 50]])
+    expect(out.find((c) => c.id === 'b')).toBe(clips[1])
+  })
+})
+
+describe('playedText', () => {
+  const transcript = makeTranscript(Array.from({ length: 30 }, (_, i) => `sentence ${i} word three four five.`))
+  const sentences = transcriptSentences(transcript)
+
+  it('reads only what a joined clip plays, marking the join', () => {
+    const c = clip('j', sentences[2].start - 0.2, sentences[20].end + 0.2, 50)
+    c.edit.cuts = [{ start: sentences[3].end + 0.2, end: sentences[19].start - 0.2 }]
+    expect(playedText(c, sentences)).toBe(`${sentences[2].text} ${sentences[3].text} [cut] ${sentences[19].text} ${sentences[20].text}`)
+  })
+
+  it('keeps the opening and the close of a long clip within the budget', () => {
+    const c = clip('l', sentences[0].start, sentences[29].end, 50)
+    const text = playedText(c, sentences, 200)
+    expect(text.length).toBeLessThanOrEqual(203)
+    expect(text.startsWith(sentences[0].text)).toBe(true)
+    expect(text.endsWith(sentences[29].text)).toBe(true)
+    expect(text).toContain(' … ')
+  })
+})
+
+describe('checkClipOpenings', () => {
+  const texts = ['Okay, so.', 'Most people get money completely wrong today.', 'They save first and spend the rest.',
+    'Yeah.', 'But the rich do it the other way.', 'That changes everything about it.', 'Try it for one month.']
+  const transcript = makeTranscript(texts)
+  const sentences = transcriptSentences(transcript)
+  const span = (from: number, to: number, score = 50) => clip(`c${from}`, Math.max(0, sentences[from].start - 0.25), sentences[to].end + 0.25, score)
+
+  it('skips the lead-in of a joined clip only while its first part stays long enough', () => {
+    // First part: lines 0-2; joined to lines 4-6.
+    const joined = span(0, 6)
+    joined.edit.cuts = [{ start: sentences[2].end + 0.25, end: sentences[4].start - 0.25 }]
+    joined.stitch = { segments: [], reason: 'test' }
+    const { clips } = checkClipOpenings(transcript, [joined], 60)
+    expect(clips[0].suggestedStart).toBeCloseTo(sentences[1].start - 0.25, 5)
+
+    // A first part that would fall under three seconds keeps its lead-in.
+    const tight = span(0, 6)
+    tight.edit.cuts = [{ start: sentences[1].start + 1.5, end: sentences[4].start - 0.25 }]
+    expect(checkClipOpenings(transcript, [tight], 60).clips[0]).toBe(tight)
+  })
+
+  it('reports the clips it penalised for a dangling opener', () => {
+    const clean = span(1, 2)
+    const { clips, dangling } = checkClipOpenings(transcript, [span(3, 6), clean], 60)
+    expect([...dangling]).toEqual(['c3'])
+    expect(clips[0].suggestedStart).toBeCloseTo(sentences[4].start - 0.25, 5)
+    expect(clips[0].viralityScore).toBe(42)
+    expect(clips[0].viralityReason).toBe('Opens on "But", which leans on something said before the clip.')
+    expect(clips[1]).toBe(clean)
+  })
+
+  it('leaves a clip that opens partway into a sentence alone', () => {
+    const mid = clip('mid', sentences[0].start + 0.5, sentences[4].end, 50)
+    expect(checkClipOpenings(transcript, [mid], 60).clips[0]).toBe(mid)
+  })
+})
+
