@@ -56,6 +56,7 @@ import {
   getExportPreferences,
   getModelPreferences,
   getMusicFolder,
+  rendererSettingsUpdate,
   getSettings,
   missingCredentialName,
   updateSettings
@@ -542,7 +543,7 @@ export function registerIpcHandlers(): void {
   })
   handle('settings:cancelLocalWhisperInstall', () => cancelLocalWhisperInstall())
   handle('settings:get', async () => getSettings())
-  handle('settings:update', async (_e, update: SettingsUpdate) => updateSettings(update))
+  handle('settings:update', async (_e, update: SettingsUpdate) => updateSettings(rendererSettingsUpdate(update, getMusicFolder())))
 
   handle('fonts:list', async () => listCustomFonts())
 

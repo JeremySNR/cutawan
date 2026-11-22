@@ -258,6 +258,19 @@ export function getMusicFolder(): string | null {
   return load().musicFolder ?? null
 }
 
+/**
+ * A settings update as the renderer may send it. The music folder becomes a
+ * media:// read root (music:list allow-lists every track in it), so the
+ * renderer can clear it but not name one: a folder is set only through the
+ * music:chooseFolder dialog, which calls updateSettings itself. Resending
+ * the folder already stored is a no-op and passes. Pure.
+ */
+export function rendererSettingsUpdate(update: SettingsUpdate, storedMusicFolder: string | null): SettingsUpdate {
+  const folder = update.musicFolder
+  if (typeof folder !== 'string' || !folder.trim() || folder.trim() === storedMusicFolder) return update
+  throw new Error('Choose the music folder with the folder picker.')
+}
+
 /** Synchronous access to the stored branding preferences. */
 export function getBrandingSettings(): BrandingSettings {
   return load().branding
