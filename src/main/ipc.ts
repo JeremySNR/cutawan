@@ -39,6 +39,7 @@ import { cancelBackgroundReframes, startBackgroundReframes } from './pipeline/ba
 import { generateSocialCaption } from './pipeline/socialCaption'
 import { translateClip, type TranslateOptions } from './pipeline/translate'
 import { dubClip, estimateDub, type DubVoiceChoice } from './pipeline/dub'
+import { condenseDubLines } from './pipeline/dubScript'
 import { DUB_VOICES, dubSupport } from '@shared/dubPlan'
 import { addCustomFonts, listCustomFonts, removeCustomFont, renderFontsDir } from './fonts'
 import { clipMusicPath, listMusicTracks } from './music'
@@ -505,7 +506,9 @@ export function registerIpcHandlers(): void {
     const resolved = dubChoice(choice)
     const apiKey = getAnalysisCredential()
     if (!apiKey) throw new Error(`Add your ${missingCredentialName()} in Settings first.`)
+    const language = clip.translation?.language ?? ''
     const dub = await dubClip(apiKey, clip, project.transcript, join(projectDir(projectId), 'dub-cache'), resolved, {
+      condense: (items) => condenseDubLines(apiKey, getModelPreferences().analysisModel, language, items),
       onProgress: (done, total) => {
         if (!event.sender.isDestroyed()) event.sender.send('dub:progress', { clipId, done, total })
       }

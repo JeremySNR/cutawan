@@ -22,6 +22,7 @@ import { clipKeptSegments, TimeMap, type KeptSegment } from '@shared/tighten'
 import { FFMPEG_PATH, FFPROBE_PATH, runBinary, runBinaryFull } from './ffmpeg'
 import { loudnormFilter, MEASURE_FILTER, parseLoudnormStats } from './loudness'
 import { synthesizeSpeech, type SpeechRequest } from './openai'
+import { condenseTarget, type CondenseItem } from './dubScript'
 
 /**
  * AI voice dubbing of a clip's accepted translation: synthesise each line,
@@ -67,7 +68,12 @@ export async function fitDubLine(
 ): Promise<FitResult> {
   const first = await synth({ faster: false, speed: 1 })
   if (first.sec <= availableSec) return { audioPath: first.path, audioSec: first.sec, tempo: 1, fit: 'natural' }
-  const faster = await synth({ faster: true, speed: fasterSpeed(first.sec, availableSec) })
+  // A failed or silent faster take falls back to the first.
+  const faster = await synth({ faster: true, speed: fasterSpeed(first.sec, availableSec) }).catch((error: unknown) => {
+    if (error instanceof Error && error.name === 'AbortError') throw error
+    console.error('Faster dub take failed; keeping the first take:', error)
+    return first
+  })
   // A model that ignores the pace request can come back no shorter.
   const best = faster.sec < first.sec ? faster : first
   if (best.sec <= availableSec) return { audioPath: best.path, audioSec: best.sec, tempo: 1, fit: 'faster' }
@@ -104,7 +110,7 @@ function speechRequest(text: string, choice: DubVoiceChoice, variant: { faster: 
  */
 export function speechCachePath(cacheDir: string, req: SpeechRequest): string {
   const key = createHash('sha256')
-    .update(JSON.stringify({ v: 1, model: req.model, voice: req.voice, input: req.input, speed: req.speed ?? 1, instructions: req.instructions ?? '' }))
+    .update(JSON.stringify({ v: 2, model: req.model, voice: req.voice, input: req.input, speed: req.speed ?? 1, instructions: req.instructions ?? '' }))
     .digest('hex')
     .slice(0, 32)
   return join(cacheDir, `${key}.mp3`)
@@ -115,6 +121,25 @@ export async function probeAudioSeconds(path: string): Promise<number> {
   const sec = Number(out.trim())
   if (!Number.isFinite(sec) || sec <= 0) throw new Error('Synthesised audio has no duration')
   return sec
+}
+
+/**
+ * Speech models pad each take with silence: up to 0.58 s before the first
+ * word and 0.33 s after the last in the live check, most of a short line's
+ * slot. Trimmed to a breath either side when the take is cached.
+ */
+export const TRIM_SILENCE_FILTER = [
+  'silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.04',
+  'areverse',
+  'silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.08',
+  'areverse'
+].join(',')
+
+/** Shorter than this once trimmed, a take holds no speech. */
+const MIN_TAKE_SEC = 0.1
+
+export class SilentTakeError extends Error {
+  constructor() { super('The voice model returned silence for this line. Try again, or choose another voice.') }
 }
 
 async function synthesiseCached(
@@ -128,11 +153,22 @@ async function synthesiseCached(
     const bytes = await synthesizeSpeech(apiKey, req, signal)
     await mkdir(cacheDir, { recursive: true })
     const temporary = `${path}.${randomUUID()}.tmp`
+    const trimmed = `${path}.${randomUUID()}.trim.mp3`
     try {
       await writeFile(temporary, bytes)
-      await rename(temporary, path)
+      // Keep the untrimmed take if ffmpeg cannot trim it: a little air beats no line.
+      const trim = await runBinaryFull(FFMPEG_PATH, ['-v', 'error', '-y', '-i', temporary, '-af', TRIM_SILENCE_FILTER,
+        '-c:a', 'libmp3lame', '-b:a', '128k', trimmed], { signal }).then(() => true, () => false)
+      signal?.throwIfAborted()
+      // Nothing left once trimmed: the model returned silence (seen on a
+      // two-word line asked to speak briskly). Never cache it.
+      if (trim && !(await probeAudioSeconds(trimmed).then((sec) => sec >= MIN_TAKE_SEC, () => false))) {
+        throw new SilentTakeError()
+      }
+      await rename(trim ? trimmed : temporary, path)
     } finally {
       await rm(temporary, { force: true })
+      await rm(trimmed, { force: true })
     }
   }
   return { path, sec: await probeAudioSeconds(path) }
@@ -175,31 +211,55 @@ export async function dubClip(
   transcript: Transcript | null,
   cacheDir: string,
   choice: DubVoiceChoice,
-  opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}
+  opts: {
+    signal?: AbortSignal
+    onProgress?: (done: number, total: number) => void
+    /** Shorter wordings for overrunning lines (dubScript.ts); omitted, lines are only sped up. */
+    condense?: (items: CondenseItem[]) => Promise<Map<number, string>>
+  } = {}
 ): Promise<ClipDub> {
   if (!clip.translation?.accepted) throw new Error('Accept the translation before dubbing it.')
   const slots = dubSlots(clip, transcript)
   if (!slots.length) throw new Error('No translated line plays in this clip, so there is nothing to dub.')
-  const lines: DubLine[] = []
   let done = 0
+  const fit = (slot: LineSlot, text: string): Promise<FitResult> => fitDubLine(slot.available, (variant) =>
+    synthesiseCached(apiKey, cacheDir, speechRequest(text, choice, variant), opts.signal))
   // A few lines at a time: the API queue bounds concurrency across the app.
-  const results = await Promise.all(slots.map(async (slot) => {
-    const fitted = await fitDubLine(slot.available, (variant) =>
-      synthesiseCached(apiKey, cacheDir, speechRequest(slot.line.text, choice, variant), opts.signal))
+  const results: Array<{ slot: LineSlot; fitted: FitResult; spoken?: string }> = await Promise.all(slots.map(async (slot) => {
+    const fitted = await fit(slot, slot.line.text)
     opts.onProgress?.(++done, slots.length)
     return { slot, fitted }
   }))
-  for (const { slot, fitted } of results) {
-    lines.push({
-      start: slot.line.start,
-      end: slot.line.end,
-      text: slot.line.text,
-      audioPath: fitted.audioPath,
-      audioSec: fitted.audioSec,
-      tempo: fitted.tempo,
-      fit: fitted.fit
-    })
+  // Lines still too long at the fastest tempo get a shorter wording, voiced again.
+  const over = results.map((r, i) => ({ r, n: i + 1 })).filter(({ r }) => r.fitted.fit === 'truncated')
+  if (opts.condense && over.length) {
+    let shorter = new Map<number, string>()
+    try {
+      shorter = await opts.condense(over.map(({ r, n }) => ({
+        n, text: r.slot.line.text, maxChars: condenseTarget(r.slot.line.text, r.slot.available, r.fitted.audioSec, DUB_MAX_TEMPO)
+      })))
+    } catch (error) {
+      if (opts.signal?.aborted) throw error
+      console.error('Shortening overrunning dub lines failed; keeping them as they are:', error)
+    }
+    await Promise.all(over.map(async ({ r, n }) => {
+      const text = shorter.get(n)
+      if (!text) return
+      const again = await fit(r.slot, text)
+      // Keep whichever overruns less; a shorter wording that now fits always wins.
+      if (again.fit !== 'truncated' || again.audioSec < r.fitted.audioSec) { r.fitted = again; r.spoken = text }
+    }))
   }
+  const lines: DubLine[] = results.map(({ slot, fitted, spoken }) => ({
+    start: slot.line.start,
+    end: slot.line.end,
+    text: slot.line.text,
+    ...(spoken ? { spoken } : {}),
+    audioPath: fitted.audioPath,
+    audioSec: fitted.audioSec,
+    tempo: fitted.tempo,
+    fit: fitted.fit
+  }))
   return {
     version: 1,
     provider: choice.provider,

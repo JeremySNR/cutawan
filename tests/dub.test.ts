@@ -17,7 +17,7 @@ import {
 } from '@shared/dubPlan'
 import { clipKeptSegments, TimeMap } from '@shared/tighten'
 import { makeTranscript } from './helpers'
-import { duckFilters, dubMixGraph, dubTrackGraph, estimateDub, fasterSpeed, fitDubLine, speechCachePath, withDubMix } from '../src/main/pipeline/dub'
+import { duckFilters, dubMixGraph, dubTrackGraph, estimateDub, fasterSpeed, fitDubLine, SilentTakeError, speechCachePath, withDubMix } from '../src/main/pipeline/dub'
 import { configureOpenAiEndpoints, synthesizeSpeech } from '../src/main/pipeline/openai'
 
 const SENTENCES = ['One two three four.', 'Five six seven eight.', 'Nine ten eleven twelve.']
@@ -85,6 +85,16 @@ describe('fitting a synthesised line into its slot', () => {
   it('marks a line truncated when even 1.25x is not enough', async () => {
     const t = takes(4, 3.5)
     expect(await fitDubLine(2, t.synth)).toMatchObject({ fit: 'truncated', tempo: DUB_MAX_TEMPO, audioSec: 3.5 })
+  })
+
+  it('keeps the first take when the faster one fails or comes back silent', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const synth = async (v: { faster: boolean; speed: number }) => {
+      if (v.faster) throw new SilentTakeError()
+      return { path: 'first.mp3', sec: 2.2 }
+    }
+    expect(await fitDubLine(2, synth)).toMatchObject({ audioPath: 'first.mp3', fit: 'stretched' })
+    error.mockRestore()
   })
 
   it('keeps the first take when the faster one came back no shorter', async () => {

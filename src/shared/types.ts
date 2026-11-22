@@ -930,8 +930,10 @@ export interface DubLine {
   /** Source slot of the translation line it voices (absolute seconds). */
   start: number
   end: number
-  /** The text synthesised; a later edit to the line makes it stale. */
+  /** The translation line it voices; a later edit to the line makes it stale. */
   text: string
+  /** Shorter wording actually voiced, when the line was too long for its slot (captions keep `text`). */
+  spoken?: string
   /** Cached synthesised audio in the project folder. */
   audioPath: string
   /** Length of the synthesised audio at normal tempo, in seconds. */

@@ -174,7 +174,7 @@ export default function TranslationSection({ project, clip }: { project: Project
                       aria-label={`Translation of line ${i + 1}`}
                       className="w-full resize-none rounded-md border border-surface-600 bg-surface-850 px-2 py-1 text-[11px] leading-relaxed text-zinc-200 focus:border-white/25 focus:outline-none"
                     />
-                    <LineFlags line={line} status={status} fit={voiced?.fit} tempo={voiced?.tempo} />
+                    <LineFlags line={line} status={status} fit={voiced?.fit} tempo={voiced?.tempo} spoken={voiced?.spoken} />
                   </div>
                 </div>
               )
@@ -217,11 +217,12 @@ export default function TranslationSection({ project, clip }: { project: Project
   )
 }
 
-function LineFlags({ line, status, fit, tempo }: {
+function LineFlags({ line, status, fit, tempo, spoken }: {
   line: TranslationLine
   status: string
   fit?: string
   tempo?: number
+  spoken?: string
 }): React.JSX.Element | null {
   const flags: Array<{ text: string; warn: boolean }> = []
   if (status === 'dropped') flags.push({ text: 'Cut from the clip', warn: false })
@@ -230,6 +231,7 @@ function LineFlags({ line, status, fit, tempo }: {
   for (const w of line.warnings ?? []) flags.push({ text: `Check: ${w}`, warn: true })
   if (fit === 'stretched' && tempo) flags.push({ text: `Dub sped up ×${tempo.toFixed(2)}`, warn: false })
   if (fit === 'faster') flags.push({ text: 'Dub re-voiced faster to fit', warn: false })
+  if (spoken) flags.push({ text: `Dub shortened to fit: “${spoken}”`, warn: false })
   if (fit === 'truncated') flags.push({ text: 'Dub too long: cut short with a fade. Shorten this line.', warn: true })
   if (!flags.length) return null
   return (
