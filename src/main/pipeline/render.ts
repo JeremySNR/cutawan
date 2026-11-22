@@ -14,8 +14,8 @@ import type {
   WatermarkPosition
 } from '@shared/types'
 import type { EncoderPreference } from '@shared/types'
-import { clipKeptSegments, remapTranscript, TimeMap, type KeptSegment } from '@shared/tighten'
-import { limitStretches, sourceStretches } from '@shared/clipSegments'
+import { clipKeptSegments, editedClipDuration, remapTranscript, TimeMap, type KeptSegment } from '@shared/tighten'
+import { SEPARATE_STRETCH_GAP_SEC, limitStretches, sourceStretches } from '@shared/clipSegments'
 import type { TimeRange } from '@shared/types'
 import { focusPanDuration, focusSnaps } from '@shared/focusTrack'
 import { automaticLayoutShots, clipAllowsAutoZoom, compositionHidesTitle, detailCaptionRanges, layoutBlocksAutoZoom } from '@shared/contentType'
@@ -36,6 +36,44 @@ import {
   resolveEncoder,
   sizeTargetedVideoArgs
 } from './encoders'
+
+/**
+ * Put every kept segment's edges on the source's frame grid, so each piece's
+ * video and audio are exactly the same length.
+ *
+ * `trim` keeps whole frames (those whose timestamp falls inside the range)
+ * while `atrim` cuts at the exact sample, so a cut between two frames left
+ * each piece's video up to a frame longer or shorter than its audio. Concat
+ * joins the pieces end to end, so the offset between picture and sound
+ * wanders by up to a frame at every cut (the errors partly cancel by the
+ * end, which is why the total length looked right). Edges go a quarter frame
+ * before a frame's timestamp, so which frames a piece holds is never left to
+ * floating-point rounding, and every piece is a whole number of frames long
+ * for both streams. The audio then leads its frames by at most a quarter
+ * frame, constantly rather than cumulatively. Pieces that vanish are
+ * dropped; the first edge never moves before the trim, the last never past
+ * it. Exported for tests.
+ */
+export function alignSegmentsToFrames(
+  segments: KeptSegment[] | null,
+  fps: number,
+  trimStart: number,
+  trimEnd: number
+): KeptSegment[] | null {
+  if (!segments || !(fps > 1 && fps < 240)) return segments
+  const edge = (t: number): number => (Math.round(t * fps) - 0.25) / fps
+  const out: KeptSegment[] = []
+  for (const segment of segments) {
+    const start = Math.max(trimStart, edge(segment.start))
+    const end = Math.min(trimEnd, edge(segment.end))
+    if (end - start < 0.5 / fps) continue
+    const last = out[out.length - 1]
+    // Two pieces that now meet are one piece.
+    if (last && start <= last.end + 1e-9) last.end = Math.max(last.end, end)
+    else out.push({ start, end })
+  }
+  return out
+}
 
 /**
  * Gentle audio fade at the clip tail so endings never cut off abruptly —
@@ -369,7 +407,11 @@ function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: bool
   const vLabels: string[] = []
   const aLabels: string[] = []
   segments.forEach((seg, i) => {
-    const input = sources ? Math.max(0, sources.findIndex((r) => seg.start >= r.start - 0.001 && seg.start < r.end)) : 0
+    // By midpoint: frame alignment can move a piece's edge a fraction of a
+    // frame outside its stretch, and an edge lookup would then pick the wrong
+    // input and cut the wrong footage.
+    const middle = (seg.start + seg.end) / 2
+    const input = sources ? Math.max(0, sources.findIndex((r) => middle >= r.start && middle <= r.end)) : 0
     const origin = sources ? sources[input].start : clipStart
     const s = Math.max(0, seg.start - origin).toFixed(3)
     const e = Math.max(0, seg.end - origin).toFixed(3)
@@ -670,7 +712,9 @@ export function renderClip(job: RenderJob): Promise<RenderResult> {
       // Preserve any previous export until the new file passes a complete decode.
       await timed('export/validate', () => runFfmpegWith(FFMPEG_PATH, ['-v', 'error', '-xerror', '-i', temporary,
         '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-'], { signal: job.signal,
-        onProgress: seconds => job.onProgress?.(.95 + .05 * Math.min(1, seconds / Math.max(.1, job.clip.edit.end - job.clip.edit.start))) }))
+        // Against what plays, not the trim span: a joined clip's trim includes
+        // the minutes it skips, which left the bar stuck at 95%.
+        onProgress: seconds => job.onProgress?.(.95 + .05 * Math.min(1, seconds / Math.max(.1, editedClipDuration(job.clip, job.transcript)))) }))
       job.signal?.throwIfAborted()
       await rename(temporary, job.outputPath)
       job.onProgress?.(1)
@@ -694,7 +738,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
   // Tighten cuts: figure out the kept segments and remap everything that is
   // timed against the source (captions, B-roll, face track) into the
   // compacted output timeline.
-  const segments = clipKeptSegments(clip, transcript)
+  const segments = alignSegmentsToFrames(clipKeptSegments(clip, transcript), source.fps, start, clip.edit.end)
   if (segments && segments.length === 0) {
     throw new Error('Nothing is left to export: every part of this clip has been cut. Undo a cut or widen the trim.')
   }
@@ -703,7 +747,12 @@ async function render(job: RenderJob): Promise<RenderResult> {
   // Moments far apart are each opened with their own seek. One input reading
   // from the first to the last would decode everything between them too.
   const stretches = segments ? limitStretches(sourceStretches(clip.edit), MAX_SOURCE_INPUTS) : []
-  const sources = stretches.length > 1 ? stretches : null
+  // A single stretch well inside the trim (a long cut at its start or end)
+  // also gets its own seek, so the cut footage is neither decoded nor
+  // measured for loudness.
+  const inset = stretches.length === 1 &&
+    (stretches[0].start - start > SEPARATE_STRETCH_GAP_SEC || clip.edit.end - stretches[0].end > SEPARATE_STRETCH_GAP_SEC)
+  const sources = stretches.length > 1 || inset ? stretches : null
 
   let effectiveClip = clip
   let captionTranscript = transcript

@@ -95,7 +95,8 @@ export default function EditorScreen(): React.JSX.Element {
     if (!videoPath || sourceMissing) return
     let alive = true
     for (const key of timelineKey.split('\n')) {
-      const [, from, to] = key.split('|')
+      // The last two fields: a file path can itself contain "|".
+      const [from, to] = key.split('|').slice(-2)
       window.cutawan
         .getTimeline(videoPath, Number(from), Number(to))
         .then((data) => {

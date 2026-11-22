@@ -150,6 +150,9 @@ export default function TrimBar({
   const cutEdges: Array<{ range: TimeRange; which: 'start' | 'end' }> = onCutEdge
     ? marks.filter((mark) => mark.kind === 'cut')
         .flatMap((mark) => [{ range: mark.range, which: 'start' as const }, { range: mark.range, which: 'end' as const }])
+        // An edge on the trim edge is the trim handle's to move; a second
+        // handle on top of it would steal the grab and jump the cut.
+        .filter(({ range, which }) => Math.abs((which === 'start' ? range.start : range.end) - (which === 'start' ? start : end)) > 1e-3)
     : []
   const leftPct = toFrac(start) * 100
   const rightPct = toFrac(end) * 100

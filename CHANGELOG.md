@@ -16,7 +16,7 @@ The biggest update to how Cutawan finds and cuts clips since the first release: 
 - **See why a clip scored what it did.** Every score now shows what it is made of: hook, emotion, value, flow and shareability, plus the visual review. Clip cards show a letter for each, and the editor shows the numbers under **Why this clip**. Clips found before this update keep their old score, marked "Legacy score"; regenerate to see the breakdown.
 - **Preview clips from the grid.** Rest the pointer on a clip card to play that moment, muted, without opening the editor.
 - **Move a cut.** Drag either edge of any cut on the timeline, so a piece can run a little longer or end a little sooner without undoing the cut.
-- **Pauses with something happening in them are kept.** Pause removal now checks each silent gap for movement on screen and for sound such as laughter or music, and keeps the gaps where something is going on: a demonstration, a reaction, a reveal. They show on the timeline with a green dashed edge; click one to remove it anyway.
+- **Pauses with something happening in them are kept.** Pause removal now checks each silent gap for movement on screen and for sound such as laughter or music, and keeps the gaps where something is going on: a demonstration, a reaction, a reveal. They show on the timeline with a green dashed edge; click one to remove it anyway. This applies to clips framed after you update; captioned whole videos are not checked.
 
 ### Improved
 
@@ -26,6 +26,7 @@ The biggest update to how Cutawan finds and cuts clips since the first release: 
 - **Better first seconds.** A clip that opens on a throwaway line ("Yeah." "Okay, so.") now starts on the sentence after it. A clip that opens on a word leaning on something earlier ("And…", "But…", "Because…") starts one sentence earlier, on the line it continues, when that fits; otherwise it ranks lower and says why.
 - **Length is a target, not a wall.** A strong clip may now run up to a quarter past the length you chose instead of being cut short before its payoff. It ranks a few points lower and says it runs long. Anything far past the target is still corrected or trimmed.
 - **No clicks at cuts.** Every cut inside a clip now gets a tiny audio fade, so pause removal and your own cuts no longer pop or click. Timing, captions and length are unchanged.
+- **Steadier lip sync in clips with many cuts.** Every cut now falls exactly on a video frame, so picture and sound stay in step through each one instead of drifting by up to a frame at every cut.
 - **Scores are more spread out and more consistent between runs.** The AI scores each part of the rubric separately and Cutawan adds them up, instead of asking for one overall number.
 - **Faster transcription of long videos** on hosted APIs (OpenAI, OpenRouter, Groq and similar): up to three parts of the audio are transcribed at once. Local Whisper, and a Whisper server on your own machine or network, still run one part at a time.
 - **Faster clip review** on API connections: up to four clips are checked at once instead of two, and endings and openings are reviewed a few clips at a time, which is also more reliable when there are many clips.
@@ -38,6 +39,7 @@ The biggest update to how Cutawan finds and cuts clips since the first release: 
 ### Fixed
 
 - AI B-roll and post captions were written from every word in a clip's span, including parts you had cut. They now use only what plays.
+- Exporting a clip whose start or end you had cut away no longer reads through the cut footage, and its volume is set from the part that plays.
 
 ### Costs and limits
 

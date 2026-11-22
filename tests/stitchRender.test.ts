@@ -108,4 +108,20 @@ describe('exporting a clip joined from distant moments', () => {
     const alone = await measureLoudness(source.path, FIRST.start, FIRST.end - FIRST.start)
     expect(Math.abs(played!.inputI - alone!.inputI)).toBeLessThan(1)
   }, 60_000)
+
+  it('seeks straight to a moment when a long cut sits at the start of the trim', async () => {
+    const clip = joinedClip()
+    // Trim 60-372 with everything before 360 cut: one stretch, well inside the trim.
+    clip.edit = { ...clip.edit, start: FIRST.start, end: SECOND.end, cuts: [{ start: FIRST.start, end: SECOND.start }] }
+    clip.stitch = undefined
+    const outputPath = join(dir, 'inset.mp4')
+    await renderClip({ clip, source, transcript: null, outputPath, encoder: 'cpu', quality: 'draft' })
+    const info = await probeVideo(outputPath)
+    expect(Math.abs(info.durationSec - 12)).toBeLessThan(.15)
+    expect(await sourceTimeAt(outputPath, 0.5)).toBeCloseTo(360.5, 0)
+    // Loudness comes from what plays: the quiet moment, not the loud stretch it skips.
+    const played = await measureLoudnessOfRanges(source.path, [SECOND])
+    expect(played!.inputI).toBeLessThan(-30)
+  }, 120_000)
 })
+
