@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import type { AnalyzeOptions, BrowserCookieSource, ImportProgress, PipelineProgress, Project } from '@shared/types'
 import { mapLimit } from './concurrency'
-import { extractThumbnail, probeVideo } from './ffmpeg'
+import { probeVideo } from './ffmpeg'
+import { writeClipThumbnail } from './thumbnail'
 import { ensureTranscript } from './projectTranscript'
 // Visual discovery and visual-payoff repair keep to the length target: only
 // transcript clips get the overrun allowance, because only they get the
@@ -18,6 +19,7 @@ import { timed } from './timing'
 import { assessClipVisuals, ensembleScore } from './visualScore'
 import { completeVisualStory } from './visualStory'
 import { attachBroll } from './broll'
+import { importLicence } from '@shared/importLicence'
 import {
   assertCookieAuthSupported,
   cookieCopyErrorHint,
@@ -55,7 +57,8 @@ export async function createProject(videoPath: string): Promise<Project> {
 
 export async function createProjectFromUrl(
   url: string,
-  onProgress: (p: ImportProgress) => void
+  onProgress: (p: ImportProgress) => void,
+  signal?: AbortSignal
 ): Promise<Project> {
   const binPath = await ensureYtDlp(onProgress)
   const prefs = getImportPreferences()
@@ -66,17 +69,27 @@ export async function createProjectFromUrl(
   assertCookieAuthSupported(cookieOpts)
   onProgress({ progress: -1, message: 'Checking the video…' })
   const meta = await withSelfUpdateRetry(binPath, onProgress, () =>
-    fetchUrlMeta(binPath, url, cookieOpts)
+    fetchUrlMeta(binPath, url, cookieOpts, signal)
   ).catch(rethrowWithLoginHint(prefs.importCookiesBrowser, Boolean(prefs.importCookiesPath)))
+
+  signal?.throwIfAborted()
+  // Not blocking: the notice on the setup screen is all this decides.
+  const licence = importLicence(url, meta.license)
+  onProgress({ progress: 0.15, message: 'Downloading video…', licence })
 
   const id = randomUUID()
   const dir = projectDir(id)
   await mkdir(dir, { recursive: true })
   const videoPath = join(dir, 'source.mp4')
-  onProgress({ progress: 0.15, message: 'Downloading video…' })
-  await withSelfUpdateRetry(binPath, onProgress, () =>
-    downloadUrlVideo(binPath, meta.webpageUrl, videoPath, onProgress, cookieOpts)
-  ).catch(rethrowWithLoginHint(prefs.importCookiesBrowser, Boolean(prefs.importCookiesPath)))
+  try {
+    await withSelfUpdateRetry(binPath, onProgress, () =>
+      downloadUrlVideo(binPath, meta.webpageUrl, videoPath, onProgress, cookieOpts, signal)
+    ).catch(rethrowWithLoginHint(prefs.importCookiesBrowser, Boolean(prefs.importCookiesPath)))
+  } catch (err) {
+    // A cancelled or failed download leaves no half-made project behind.
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+    throw err
+  }
 
   onProgress({ progress: 0.97, message: 'Reading video…' })
   const video = await probeVideo(videoPath)
@@ -90,7 +103,8 @@ export async function createProjectFromUrl(
     transcript: null,
     clips: [],
     prompt: '',
-    videoType: 'auto'
+    videoType: 'auto',
+    importLicence: licence
   }
   await saveProject(project)
   onProgress({ progress: 1, message: 'Done' })
@@ -332,10 +346,13 @@ export async function analyzeProject(
     let thumbnailed = 0
     await timed('thumbnails', () => mapLimit(clips, 4, async (clip) => {
       signal?.throwIfAborted()
-      const at = clip.suggestedStart + Math.min(1.5, (clip.suggestedEnd - clip.suggestedStart) / 2)
       try {
-        clip.thumbnailPath = await extractThumbnail(project.video.path, at, join(thumbsDir, `${clip.id}.jpg`))
+        // Best of a few candidates inside what the clip plays; the plain
+        // 1.5 s frame whenever sampling fails.
+        clip.thumbnailPath = await writeClipThumbnail(project.video.path, project.video, clip, transcript,
+          join(thumbsDir, `${clip.id}.jpg`), signal)
       } catch {
+        signal?.throwIfAborted()
         clip.thumbnailPath = null
       }
       thumbnailed++

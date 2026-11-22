@@ -5,6 +5,7 @@ import type {
   CaptionVideoOptions,
   Clip,
   CustomFont,
+  ImportLicence,
   ImportProgress,
   PipelineProgress,
   Project,
@@ -104,6 +105,8 @@ interface AppState {
   /** Whether the running whole-video job was asked to track the speaker. */
   pipelineFollowSpeaker: boolean
   importProgress: ImportProgress | null
+  /** Reuse licence of the URL import in progress, once its metadata is read. */
+  importLicence: ImportLicence | null
   selectedClipId: string | null
   exports: Record<string, ExportEntry>
   exportDir: string | null
@@ -181,6 +184,7 @@ export const useStore = create<AppState>((set, get) => ({
   pipelineMode: 'clips',
   pipelineFollowSpeaker: false,
   importProgress: null,
+  importLicence: null,
   selectedClipId: null,
   exports: {},
   exportDir: null,
@@ -205,7 +209,8 @@ export const useStore = create<AppState>((set, get) => ({
     void registerFonts(customFonts)
     window.cutawan.onPipelineProgress((p) => set({ pipelineProgress: p }))
     window.cutawan.onImportProgress((p) => {
-      if (get().importProgress !== null) set({ importProgress: p })
+      if (get().importProgress === null) return
+      set(p.licence ? { importProgress: p, importLicence: p.licence } : { importProgress: p })
     })
     window.cutawan.onBackgroundReframe((event) => {
       const running = { ...get().backgroundReframing }
@@ -259,14 +264,16 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   importVideoFromUrl: async (url) => {
-    set({ importProgress: { progress: -1, message: 'Starting…' }, pipelineError: null })
+    set({ importProgress: { progress: -1, message: 'Starting…' }, importLicence: null, pipelineError: null })
     try {
       const project = await window.cutawan.createProjectFromUrl(url.trim())
-      set({ project, screen: 'home', importProgress: null })
+      // The project carries the licence from here on (see SetupPanel).
+      set({ project, screen: 'home', importProgress: null, importLicence: null })
       await get().refreshProjects()
     } catch (err) {
       set({
         importProgress: null,
+        importLicence: null,
         pipelineError: err instanceof Error ? cleanIpcError(err.message) : String(err)
       })
     }
