@@ -193,7 +193,7 @@ npm run typecheck
 npm run lint
 ```
 
-Integration test scripts live in `scripts/` (`test-pipeline`, `test-e2e`, `test-quality`, `test-wholevideo`, `test-encoders`, `test-resilience`, `test-broll`, `test-youtube`, `test-asd`, `smoke-test.sh`). See each file's header for what it covers. The e2e ones need `OPENAI_API_KEY`.
+Integration test scripts live in `scripts/` (`test-pipeline`, `test-e2e`, `test-quality`, `test-wholevideo`, `test-encoders`, `test-resilience`, `test-broll`, `test-youtube`, `test-asd`, `smoke-test.sh`, `test-animated-captions.sh`). See each file's header for what it covers. The e2e ones need `OPENAI_API_KEY`. `test-animated-captions.sh` exports a clip with every animated caption style through the real hidden Chromium caption window under Xvfb (`CUTAWAN_CAPTION_BENCH=1` adds a 60 s timing against libass).
 
 To measure clip quality on your own projects, `scripts/eval-clips.ts` reads every saved project and reports how many clips open mid-sentence, cut a sentence off, or trail into dead air, plus the length spread. Add `--rerun` (needs `OPENAI_API_KEY`, a few cents per project, no transcription cost) to re-run clip detection on the saved transcripts with the current prompts and compare, which is how to check a prompt change actually helps:
 

@@ -62,7 +62,7 @@ async function fontFiles(families: string[], dirs: string[]): Promise<{ fonts: C
     if (!directory) {
       directory = []
       for (const dir of dirs) {
-        let names: string[] = []
+        let names: string[]
         try {
           names = await readdir(dir)
         } catch {

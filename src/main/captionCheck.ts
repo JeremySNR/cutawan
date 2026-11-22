@@ -11,7 +11,8 @@ import { planTitle } from '@shared/titleLayout'
 import { FFMPEG_PATH, probeVideo, runFfmpeg } from './pipeline/ffmpeg'
 import { renderClip, type RenderResult } from './pipeline/render'
 import { fontsDir } from './pipeline/captions'
-import { openCaptionFrames, setCaptionFrameRenderer, type CaptionFrameRenderer } from './pipeline/animatedCaptions'
+import { openCaptionFrames, setCaptionFrameRenderer, writeCaptionFrames, type CaptionFrameRenderer } from './pipeline/animatedCaptions'
+import { Writable } from 'node:stream'
 
 /**
  * Real-export check for the animated caption styles, run inside Electron
@@ -150,15 +151,23 @@ async function expectedFrame(plan: AnimatedCaptionPlan, t: number): Promise<{ fr
   }
 }
 
-function meanError(a: Buffer, b: Buffer, rect: { x: number; y: number; w: number; h: number }): number {
+/**
+ * Mean RGB error over the pixels the window actually inked (expected frame
+ * differs from the background), so empty margins do not dilute it.
+ */
+function inkError(actual: Buffer, expected: Buffer, rect: { x: number; y: number; w: number; h: number }): number {
   let sum = 0
+  let n = 0
   for (let y = rect.y; y < rect.y + rect.h; y++) {
     for (let x = rect.x; x < rect.x + rect.w; x++) {
       const i = (y * W + x) * 3
-      sum += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2])
+      const inked = Math.abs(expected[i] - BG[0]) + Math.abs(expected[i + 1] - BG[1]) + Math.abs(expected[i + 2] - BG[2]) > 24
+      if (!inked) continue
+      sum += Math.abs(actual[i] - expected[i]) + Math.abs(actual[i + 1] - expected[i + 1]) + Math.abs(actual[i + 2] - expected[i + 2])
+      n++
     }
   }
-  return sum / (rect.w * rect.h * 3)
+  return n ? sum / (n * 3) : Infinity
 }
 
 function planFor(clip: Clip, transcript: Transcript): AnimatedCaptionPlan {
@@ -239,14 +248,16 @@ async function checkStyles(dir: string, source: VideoInfo): Promise<void> {
     assert.ok(pause.count < 50, `${preset.id}: ${pause.count} stray pixels in the pause`)
     // The exported frame is the window's drawing over the picture.
     const expected = await expectedFrame(plan, animFrame / FPS)
-    const error = meanError(get('anim'), expected.frame, expected.rect)
+    const error = inkError(get('anim'), expected.frame, expected.rect)
     const neighbour = await expectedFrame(plan, (animFrame + 2) / FPS)
-    const offByTwo = meanError(get('anim'), neighbour.frame, expected.rect)
+    const offByTwo = inkError(get('anim'), neighbour.frame, expected.rect)
     await pngOf(get('anim'), join(dir, `${preset.id}-export.png`))
     await pngOf(expected.frame, join(dir, `${preset.id}-window.png`))
     console.log(`PASS ${preset.id}: ${seconds.toFixed(1)}s export, mean error vs window ${error.toFixed(2)} (two frames off: ${offByTwo.toFixed(2)})`)
-    assert.ok(error < 4, `${preset.id}: export differs from the window's drawing (${error.toFixed(2)})`)
-    if (preset.animation?.kind !== 'sweep' || offByTwo > 0) assert.ok(error <= offByTwo, `${preset.id}: frame timing is off`)
+    // Over inked pixels only: x264 and 4:2:0 chroma cost a few levels at
+    // glyph edges; a wrong alpha mode or a missing word costs tens.
+    assert.ok(error < 12, `${preset.id}: export differs from the window's drawing (${error.toFixed(2)})`)
+    assert.ok(error < offByTwo, `${preset.id}: the export matches a different frame better (timing off)`)
   }
 }
 
@@ -301,13 +312,29 @@ async function bench(dir: string): Promise<void> {
     segments.push({ id, text: all.map((w) => w.text).join(' '), start: all[0].start, end: all[all.length - 1].end, words: all })
   }
   const transcript: Transcript = { language: 'english', durationSec: 62, segments }
-  const times: Record<string, number> = {}
-  for (const style of ['beast', 'pop', 'glide', 'sweep', 'prism', 'spark']) {
+  // libass first and last, so a busy machine shows up as drift between the two.
+  const runs = ['beast', 'pop', 'glide', 'sweep', 'prism', 'spark', 'beast']
+  const times: Record<string, number[]> = {}
+  for (const [i, style] of runs.entries()) {
     const clip = makeClip({ captionStyleId: style, emoji: true }, 60)
-    const { result, seconds } = await exportClip(info, clip, transcript, join(dir, `bench-${style}.mp4`))
+    const { result, seconds } = await exportClip(info, clip, transcript, join(dir, `bench-${i}-${style}.mp4`))
     assert.equal(result.captionNotice, undefined)
-    times[style] = seconds
-    console.log(`BENCH ${style}: ${seconds.toFixed(1)}s for a 60 s 1080x1920 export${style === 'beast' ? ' (libass)' : ` (${(seconds / times.beast).toFixed(2)}x libass)`}`)
+    ;(times[style] ??= []).push(seconds)
+    console.log(`BENCH ${style}: ${seconds.toFixed(1)}s for a 60 s 1080x1920 export${style === 'beast' ? ' (libass)' : ''}`)
+  }
+  const libass = times.beast.reduce((a, b) => a + b, 0) / times.beast.length
+  for (const style of runs.slice(1, -1)) console.log(`BENCH ${style}: ${(times[style][0] / libass).toFixed(2)}x the libass export (${libass.toFixed(1)}s mean)`)
+  // The caption side alone: every frame drawn in the window and written to a
+  // sink, which is what the animated path adds on top of ffmpeg's overlay.
+  for (const style of runs.slice(1, -1)) {
+    const clip = makeClip({ captionStyleId: style, emoji: true }, 60)
+    const plan = { ...planFor(clip, transcript), duration: 60 }
+    const session = await openCaptionFrames({ plan, width: W, height: H, fontsDir: fontsDir() })
+    const sink = new Writable({ write: (_chunk, _enc, done) => done() })
+    const started = performance.now()
+    const stats = await writeCaptionFrames(session, plan, { width: W, height: H, fps: 30 }, sink)
+    session.close()
+    console.log(`BENCH ${style} frames alone: ${((performance.now() - started) / 1000).toFixed(1)}s for ${stats.frames} frames (${stats.drawn} drawn, ${stats.empty} empty)`)
   }
   await writeFile(join(dir, 'bench.json'), JSON.stringify(times, null, 2))
 }

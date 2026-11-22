@@ -134,18 +134,22 @@ export interface Spring {
 
 /** Springs used by the animated styles. */
 export const SPRINGS = {
-  /** A word popping in: about 15% overshoot, settled in ~0.35 s. */
-  pop: { omega: 26, zeta: 0.52 },
+  /** A word popping in: about 13% overshoot, settled in ~0.4 s. */
+  pop: { omega: 32, zeta: 0.55 },
   /** The box gliding to the next word: a small overshoot, quick. */
-  glide: { omega: 30, zeta: 0.7 },
+  glide: { omega: 34, zeta: 0.7 },
   /** A whole card springing in. */
   card: { omega: 20, zeta: 0.55 },
   /** The hook title settling. */
   title: { omega: 16, zeta: 0.62 }
 } satisfies Record<string, Spring>
 
-/** Residual motion below which a spring counts as settled (exactly 1). */
-const SPRING_EPSILON = 0.0005
+/**
+ * Residual motion below which a spring counts as settled (exactly 1): 0.2% of
+ * a scale is well under a pixel at caption sizes, and settling sooner lets the
+ * export reuse more frames.
+ */
+const SPRING_EPSILON = 0.002
 
 /** Seconds until an underdamped spring's envelope stays inside SPRING_EPSILON. */
 export function springSettleTime(spring: Spring): number {
