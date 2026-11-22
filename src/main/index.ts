@@ -8,6 +8,7 @@ import { initialWindowSize, MIN_WINDOW } from './windowSize'
 import { resolveUserDataPath } from './userData'
 import { stopInference } from './inference/client'
 import { validatePackage } from './packageValidation'
+import { openCaptionFrameWindow, registerCaptionFrameRenderer } from './captionFrames'
 
 app.setName('Cutawan')
 app.setPath('userData', resolveUserDataPath(app.getPath('appData'), process.env.CUTAWAN_USER_DATA))
@@ -176,6 +177,34 @@ async function runSmokeCapture(win: BrowserWindow, dir: string): Promise<void> {
   }
   await shot('editor-opening')
   for (const id of toggles) await click(`[data-testid="${id}"]`)
+  // An animated caption style: the canvas layer replaces the static captions
+  // and title, drawn by the same code the export's hidden window runs.
+  await click('[data-testid="caption-style-spark"]')
+  await win.webContents.executeJavaScript(`(() => {
+    const range = document.querySelector('input[type="range"][max="1000"]')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(range, '205')
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+  await sleep(900)
+  const animatedInk = await win.webContents.executeJavaScript(`(() => {
+    const canvas = document.querySelector('[data-testid="animated-captions"]')
+    if (!canvas || !canvas.width) return -1
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+    let ink = 0
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 128) ink++
+    return ink
+  })()`)
+  console.info('[smoke] animated caption pixels:', animatedInk)
+  if (animatedInk <= 0) throw new Error('Smoke capture: the animated caption style drew nothing in the preview')
+  if (await win.webContents.executeJavaScript(`Boolean(document.querySelector('[data-testid="caption-card"]'))`)) {
+    throw new Error('Smoke capture: static captions drawn under an animated style')
+  }
+  await shot('editor-animated')
+  await key('Z', [process.platform === 'darwin' ? 'meta' : 'control'])
+  await sleep(600)
+  if (await win.webContents.executeJavaScript(`Boolean(document.querySelector('[data-testid="animated-captions"]'))`)) {
+    throw new Error('Smoke capture: undo did not restore the caption style')
+  }
   // Out to the setup screen, which is where the two modes are chosen.
   await click('[data-testid="back-button"]')
   await click('[data-testid="regenerate-button"]')
@@ -296,6 +325,16 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // Real-export check of the animated caption styles (scripts/test-animated-captions.sh).
+  if (process.env.CUTAWAN_CAPTION_CHECK) {
+    const dir = process.env.CUTAWAN_CAPTION_CHECK
+    registerCaptionFrameRenderer()
+    void import('./captionCheck').then(({ runCaptionCheck }) => runCaptionCheck(dir, openCaptionFrameWindow)).then(() => app.quit()).catch((error) => {
+      console.error('Animated caption check FAILED:', error)
+      app.exit(1)
+    })
+    return
+  }
   if (process.env.CUTAWAN_PACKAGE_CHECK) {
     void validatePackage(process.env.CUTAWAN_PACKAGE_CHECK).then(() => app.quit()).catch(error => {
       console.error('Packaged validation failed:', error)
@@ -321,6 +360,7 @@ app.whenReady().then(() => {
   })
 
   registerIpcHandlers()
+  registerCaptionFrameRenderer()
   applyAppIcon()
   createWindow()
 
@@ -330,6 +370,8 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  // The caption check only ever opens (and closes) hidden caption windows.
+  if (process.env.CUTAWAN_CAPTION_CHECK) return
   if (process.platform !== 'darwin') app.quit()
 })
 

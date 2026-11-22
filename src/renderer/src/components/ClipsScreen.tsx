@@ -261,6 +261,7 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
             bytes={entry?.bytes}
             downscaled={entry?.downscaled}
             check={entry?.check}
+            captionNotice={entry?.captionNotice}
             onExport={() => void exportClip(clip.id)}
             onCancel={() => void cancelExport(clip.id)}
           />
@@ -351,6 +352,7 @@ export function ExportButton({
   bytes,
   downscaled,
   check,
+  captionNotice,
   onExport,
   onCancel
 }: {
@@ -362,6 +364,8 @@ export function ExportButton({
   downscaled?: boolean
   /** The check after the render, shown as a small badge with the details on hover. */
   check?: ExportCheckReport
+  /** Set when an animated caption style had to be burned with its libass look. */
+  captionNotice?: string
   onExport: () => void
   onCancel: () => void
 }): React.JSX.Element {
@@ -391,14 +395,14 @@ export function ExportButton({
         <button
           onClick={() => void window.cutawan.showItemInFolder(outputPath)}
           className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-xs font-medium text-emerald-400 transition hover:bg-emerald-500/25"
-          title={
-            downscaled
-              ? `${outputPath} — scaled down to fit the size limit`
-              : outputPath
-          }
+          title={[
+            downscaled ? `${outputPath} — scaled down to fit the size limit` : outputPath,
+            captionNotice
+          ].filter(Boolean).join('\n')}
         >
           <Check size={13} /> Saved{sizeLabel}
           <FolderOpen size={13} />
+          {captionNotice && <AlertTriangle size={12} className="text-amber-400" aria-label={captionNotice} />}
         </button>
         <ExportCheckBadge check={check} />
       </div>

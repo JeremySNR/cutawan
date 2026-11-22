@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import type { Writable } from 'node:stream'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -19,6 +20,12 @@ export interface RunOptions {
   /** Called with parsed "out_time" seconds while ffmpeg reports -progress. */
   onProgress?: (outTimeSec: number) => void
   signal?: AbortSignal
+  /**
+   * Feeds the child's stdin (e.g. caption frames for a `pipe:0` input) and
+   * ends it. If it rejects, the child is stopped and the run rejects with
+   * that error.
+   */
+  stdin?: (stream: Writable) => Promise<unknown>
 }
 
 export interface BinaryOutput {
@@ -49,9 +56,17 @@ export function runBinaryFull(bin: string, args: string[], opts: RunOptions = {}
       stderr += d.toString()
       if (stderr.length > 131072) stderr = stderr.slice(-65536)
     })
+    let feedError: unknown = null
+    if (opts.stdin) {
+      opts.stdin(child.stdin).catch((error: unknown) => {
+        feedError = error
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      })
+    }
     child.on('error', reject)
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr })
+      if (feedError) reject(feedError)
+      else if (code === 0) resolve({ stdout, stderr })
       else reject(new Error(`${bin.split(/[\\/]/).pop()} exited with code ${code}:\n${stderr.slice(-2000)}`))
     })
   })

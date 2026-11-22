@@ -4,7 +4,7 @@ import type { Clip, Project, WatermarkPosition } from '@shared/types'
 import { captionEmphasisLook, hexToRgba, resolveCaptionStyle, type CaptionStyle } from '@shared/captionStyles'
 import { captionLinePitchEm, captionWordText, groupDisplayEnd, type WordGroup } from '@shared/captionLayout'
 import { CAPTION_EMOJI_FONT, EMOJI_EM, EMPHASIS_SCALE } from '@shared/captionEmphasis'
-import { ClipTimeline, clipTimelineParts, timelineTranscript } from '@shared/clipTimeline'
+import { ClipTimeline, clipTimelineParts, mapTimedToOutput, timelineTranscript } from '@shared/clipTimeline'
 import { clipCaptionGroups, clipSoundEffects, clipTitlePlan } from '@shared/clipOverlays'
 import { clipCaptionPositionRanges } from '@shared/captionPlacement'
 import type { TitlePlan } from '@shared/titleLayout'
@@ -23,8 +23,10 @@ import { usePreviewBus } from '../lib/previewBus'
 import { PreviewAudio, type PreviewMix } from '../lib/previewAudio'
 import { useMusicTracks } from '../lib/musicTracks'
 import { useStore } from '../store'
-import { showsOriginalCaptions } from '@shared/captionTranslation'
+import { showsOriginalCaptions, translatedCaptionPlan } from '@shared/captionTranslation'
+import { animatedCaptionPlan } from '@shared/animatedCaptions'
 import { TranslatedCaptionOverlay, useDubPlayback } from './TranslatedCaptions'
+import AnimatedCaptionLayer from './AnimatedCaptionLayer'
 
 /**
  * Live preview that mimics the exported result: plays the clip's output
@@ -46,6 +48,8 @@ export default function PreviewPlayer({
   const overviewRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number>(0)
   const publishedRef = useRef(-Infinity)
+  /** Output time at the latest display frame, for the animated caption layer. */
+  const outputTimeRef = useRef(0)
   const playbackClockRef = useRef<PlaybackClock>({ mediaTime: 0, wallAt: 0 })
   const previewPlanRef = useRef<PreviewFramePlan>({
     zoomEvents: null,
@@ -351,7 +355,8 @@ export default function PreviewPlayer({
         // second; re-rendering it every frame dropped frames and made the
         // zoom stutter.
         applyFrame(smoothed.t)
-        audioRef.current?.tick(tl.toOutputIn(pieceRef.current, smoothed.t))
+        outputTimeRef.current = tl.toOutputIn(pieceRef.current, smoothed.t)
+        audioRef.current?.tick(outputTimeRef.current)
         if (Math.abs(smoothed.t - publishedRef.current) >= 1 / 30) {
           publishedRef.current = smoothed.t
           setTime(smoothed.t)
@@ -418,6 +423,31 @@ export default function PreviewPlayer({
     [clip, style.positionY, style.fontScale, project.video.width, project.video.height]
   )
   const captionY = captionPositionAt(positionRanges, time, style.positionY)
+  // Animated styles: the same plan the export draws frame by frame, on the
+  // output timeline (captions, the hook title and translated cards).
+  const animatedPlan = useMemo(() => {
+    if (!style.animation) return null
+    const translation = clip.edit.captionsEnabled
+      ? translatedCaptionPlan(clip, project.transcript, keptSegments, style, aspectStyle, window.cutawan.osPlatform, timeline.coldOpenDuration)
+      : null
+    const plan = animatedCaptionPlan({
+      transcript: project.transcript,
+      clip,
+      timeline,
+      style,
+      aspectRatio: aspectStyle,
+      captions: clip.edit.captionsEnabled && project.transcript !== null,
+      title: titlePlan,
+      translation,
+      positionRanges: mapTimedToOutput(positionRanges, timeline)
+    })
+    return plan.cards.length || plan.title || plan.translation?.events.length ? plan : null
+  }, [style, clip, project.transcript, keptSegments, aspectStyle, timeline, titlePlan, positionRanges])
+  // While paused (seeks, scrubbing) the published time is the playhead.
+  useEffect(() => {
+    if (!playing) outputTimeRef.current = outputTime
+  }, [outputTime, playing])
+  const getOutputTime = useCallback(() => outputTimeRef.current, [])
   const showTitle = titlePlan !== null && outputTime >= titlePlan.start && outputTime < titlePlan.end
   const heardInExport = mix.cues.length > 0 || mix.musicUrl !== null
 
@@ -453,7 +483,8 @@ export default function PreviewPlayer({
         <canvas ref={overviewRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 hidden w-full" />
         {!inColdOpen && <BrollOverlay clip={clip} time={time} />}
         <WatermarkOverlay />
-        {captionGroups.length > 0 && showsOriginalCaptions(clip) && (
+        {animatedPlan && <AnimatedCaptionLayer plan={animatedPlan} getTime={getOutputTime} />}
+        {!style.animation && captionGroups.length > 0 && showsOriginalCaptions(clip) && (
           <CaptionOverlay
             groups={captionGroups}
             time={outputTime}
@@ -463,9 +494,9 @@ export default function PreviewPlayer({
             style={style}
           />
         )}
-        <TranslatedCaptionOverlay project={project} clip={clip} segments={keptSegments} outputTime={outputTime} outputOffset={timeline.coldOpenDuration} sourceTime={time} positionRanges={positionRanges} aspectRatio={aspectStyle} />
+        {!style.animation && <TranslatedCaptionOverlay project={project} clip={clip} segments={keptSegments} outputTime={outputTime} outputOffset={timeline.coldOpenDuration} sourceTime={time} positionRanges={positionRanges} aspectRatio={aspectStyle} />}
 
-        {showTitle && titlePlan && <TitleOverlay plan={titlePlan} />}
+        {!style.animation && showTitle && titlePlan && <TitleOverlay plan={titlePlan} />}
         {inColdOpen && (
           <span className="pointer-events-none absolute left-2 top-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300">
             Cold open

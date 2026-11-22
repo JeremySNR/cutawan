@@ -34,7 +34,17 @@ import type { TimeRange } from '@shared/types'
 import { focusPanDuration, focusSnaps } from '@shared/focusTrack'
 import { automaticLayoutShots, clipAllowsAutoZoom, compositionHidesTitle, layoutBlocksAutoZoom } from '@shared/contentType'
 import { compositionGraph, fitRegionGraph } from './layoutFilters'
-import { resolveCaptionStyle } from '@shared/captionStyles'
+import { getCaptionStyle, libassCaptionStyleId, resolveCaptionStyle } from '@shared/captionStyles'
+import { animatedCaptionPlan, type AnimatedCaptionPlan } from '@shared/animatedCaptions'
+import { planTitle } from '@shared/titleLayout'
+import {
+  CaptionRendererError,
+  captionFallbackNotice,
+  captionFrameInputArgs,
+  openCaptionFrames,
+  writeCaptionFrames,
+  type CaptionFrameSession
+} from './animatedCaptions'
 import { computeZoomEvents, fitZoomEvents, remapZoomEvents, type ZoomEvent } from '@shared/zoom'
 import { planUploadEncode, type UploadEncodePlan } from '@shared/uploadBudget'
 import { FFMPEG_PATH, probeVideo, runFfmpegWith } from './ffmpeg'
@@ -658,6 +668,11 @@ export function buildFilterGraph(
     audioTailSec?: number
     /** Effects and music to mix under the speech; absent or empty mixes nothing. */
     audioMix?: AudioMixPlan | null
+    /**
+     * Animated captions: frames arrive as raw RGBA on stdin (see
+     * animatedCaptions.ts) and are overlaid instead of burning `assPath`.
+     */
+    captionFrames?: { width: number; height: number; fps: number } | null
   }
 ): FilterGraph {
   const { w, h } = targetDims(clip.edit.aspect, source)
@@ -666,6 +681,12 @@ export function buildFilterGraph(
   /** Image inputs (B-roll, watermark) come after the source input or inputs and any cold-open input. */
   const coldOpen = tighten?.coldOpen ?? null
   const sourceInputs = (tighten?.sources?.length ?? 1) + (coldOpen ? 1 : 0)
+  // Caption frames (animated styles) are the first input after the sources,
+  // so every image input after them moves up by one.
+  const captionFrames = options?.captionFrames ?? null
+  const captionInput = captionFrames ? sourceInputs : -1
+  if (captionFrames) extraInputs.push(...captionFrameInputArgs(captionFrames.width, captionFrames.height, captionFrames.fps))
+  const imageInputs = sourceInputs + (captionFrames ? 1 : 0)
 
   const items = clip.broll.filter(
     (b) =>
@@ -703,7 +724,7 @@ export function buildFilterGraph(
   const mix = options?.audioMix
   const mixing = source.hasAudio && mix && (mix.sfx.length > 0 || mix.musicPath)
   const watermarked = Boolean(options?.branding?.enabled && options.branding.imagePath)
-  const musicInput = mixing && mix.musicPath ? sourceInputs + items.length + (watermarked ? 1 : 0) : null
+  const musicInput = mixing && mix.musicPath ? imageInputs + items.length + (watermarked ? 1 : 0) : null
   if (source.hasAudio) {
     const master = audioChain(clipDuration, options?.loudness ?? null, options?.audioTailSec)
     if (mixing) {
@@ -722,7 +743,7 @@ export function buildFilterGraph(
   }
 
   items.forEach((item, i) => {
-    const input = i + sourceInputs
+    const input = i + imageInputs
     const s = Math.max(0, item.start - clip.edit.start)
     const e = Math.min(clipDuration, item.end - clip.edit.start)
     extraInputs.push('-loop', '1', '-t', clipDuration.toFixed(3), '-i', item.imagePath!)
@@ -754,7 +775,7 @@ export function buildFilterGraph(
 
   const branding = options?.branding
   if (branding?.enabled && branding.imagePath) {
-    const input = items.length + sourceInputs
+    const input = items.length + imageInputs
     extraInputs.push('-loop', '1', '-t', clipDuration.toFixed(3), '-i', branding.imagePath)
     const wmWidth = Math.max(2, Math.round(w * Math.min(0.5, Math.max(0.04, branding.scale))))
     const opacity = Math.min(1, Math.max(0.05, branding.opacity))
@@ -770,7 +791,10 @@ export function buildFilterGraph(
 
   // Square pixels: an even-rounded crop scaled to exact output dimensions
   // otherwise carries a sample aspect like 404:405 that players honour.
-  if (assPath) {
+  if (captionFrames) {
+    // Straight-alpha RGBA over the picture, exactly where libass would draw.
+    parts.push(`[${current}][${captionInput}:v]overlay=0:0:eof_action=repeat:format=auto,setsar=1[vout]`)
+  } else if (assPath) {
     const fontsDirPath = options?.fontsDirPath ?? fontsDir()
     parts.push(
       `[${current}]ass=filename='${escapeFilterPath(assPath)}':fontsdir='${escapeFilterPath(fontsDirPath)}',setsar=1[vout]`
@@ -823,6 +847,8 @@ export interface RenderResult {
   sizePlan: UploadEncodePlan | null
   /** The check after the render; see exportCheck.ts. */
   check?: ExportCheckReport
+  /** Set when an animated caption style was burned with its libass equivalent, and why. */
+  captionNotice?: string
 }
 
 /**
@@ -858,7 +884,7 @@ export function renderClip(job: RenderJob): Promise<RenderResult> {
   return mediaJobs.run(async () => {
     const temporary = `${job.outputPath}.partial-${randomUUID()}.mp4`
     try {
-      const result = await timed('export/render', () => render({ ...job, outputPath: temporary,
+      const result = await timed('export/render', () => renderWithCaptionFallback({ ...job, outputPath: temporary,
         onProgress: progress => job.onProgress?.(progress * .95) }))
       // Preserve any previous export until the new file passes a complete decode.
       await timed('export/validate', () => runFfmpegWith(FFMPEG_PATH, ['-v', 'error', '-xerror', '-i', temporary,
@@ -878,7 +904,13 @@ export function renderClip(job: RenderJob): Promise<RenderResult> {
   }, job.signal, 1)
 }
 
-async function render(job: RenderJob): Promise<RenderResult> {
+/** What renderWithCaptionFallback adds to a job for its libass retry. */
+interface InternalRenderJob extends RenderJob {
+  forceLibassCaptions?: boolean
+  captionNotice?: string
+}
+
+async function render(job: InternalRenderJob, cleanup: Array<() => void>): Promise<RenderResult> {
   const { clip, transcript } = job
   // Projects store probe results; refresh them for rotated or relinked source
   // files before translating normalized regions into decoded-frame pixels.
@@ -948,7 +980,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
     }
   }
 
-  const captionStyle = resolveCaptionStyle(
+  const chosenStyle = resolveCaptionStyle(
     clip.edit.captionStyleId,
     job.branding?.colors,
     clip.edit.captionFontFamily ?? undefined
@@ -957,8 +989,57 @@ async function render(job: RenderJob): Promise<RenderResult> {
   // The title appears once the cold open has played.
   const titleStart = timeline?.coldOpenDuration ?? 0
   const captions = clip.edit.captionsEnabled && captionTranscript !== null
+  const captionTimeline = timeline ?? new ClipTimeline([{ start, end: clip.edit.end }])
+
+  // Animated styles are drawn frame by frame in a hidden Chromium window and
+  // overlaid (animatedCaptions.ts). If that cannot start, the export burns
+  // the style's nearest libass look instead and says so; it never fails.
+  let animated: { session: CaptionFrameSession; plan: AnimatedCaptionPlan } | null = null
+  let captionNotice = job.captionNotice
+  if (chosenStyle.animation && (captions || titleText) && !job.forceLibassCaptions) {
+    const sourceRanges = clipCaptionPositionRanges(clip, chosenStyle.positionY, chosenStyle.fontScale, source.width, source.height)
+    const plan = animatedCaptionPlan({
+      transcript,
+      clip,
+      timeline: captionTimeline,
+      style: chosenStyle,
+      aspectRatio: w / h,
+      captions,
+      title: titleText
+        ? planTitle(titleText, {
+            styleId: clip.edit.titleStyle,
+            captionStyle: chosenStyle,
+            brandColors: job.branding?.colors,
+            aspectRatio: w / h,
+            start: titleStart,
+            duration: outputDuration
+          })
+        : null,
+      translation: clip.edit.captionsEnabled
+        ? translatedCaptionPlan(clip, transcript, segments, chosenStyle, w / h, process.platform, timeline?.coldOpenDuration ?? 0)
+        : null,
+      positionRanges: mapTimedToOutput(sourceRanges, captionTimeline)
+    })
+    try {
+      const session = await timed('export/caption-window', () =>
+        openCaptionFrames({ plan, width: w, height: h, fontsDir: job.fontsDirPath ?? fontsDir() }, job.signal))
+      cleanup.push(() => session.close())
+      animated = { session, plan }
+    } catch (error) {
+      job.signal?.throwIfAborted()
+      console.error('Animated captions unavailable, burning the libass equivalent:', error)
+      captionNotice = animatedFallbackNotice(chosenStyle.id, error)
+    }
+  }
+  // Caption frames follow the picture's frame rate: frame n shows time n / fps.
+  const captionFps = source.fps > 0 && Number.isFinite(source.fps) ? source.fps : 30
+  const libassStyleId = animated ? chosenStyle.id : libassCaptionStyleId(clip.edit.captionStyleId)
+  const captionStyle = libassStyleId === chosenStyle.id
+    ? chosenStyle
+    : resolveCaptionStyle(libassStyleId, job.branding?.colors, clip.edit.captionFontFamily ?? undefined)
+
   let assPath: string | null = null
-  if (captions || titleText) {
+  if ((captions || titleText) && !animated) {
     // libass sizes text against the font's win ascent+descent, not the em
     // square the preview uses, so the ASS needs the resolved font's metrics
     // to come out the same size on screen (see assFontSize).
@@ -972,7 +1053,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
     const positionRanges = timeline ? mapTimedToOutput(sourceRanges, timeline) : sourceRanges
     const ass = buildAss(captions && captionTranscript ? captionTranscript : { language: '', durationSec: 0, segments: [] }, {
       fontMetrics,
-      styleId: clip.edit.captionStyleId,
+      styleId: libassStyleId,
       width: w,
       height: h,
       clipStart: captionStart,
@@ -986,7 +1067,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
       // Translated captions are captions: off with them, as in the preview.
       translation: captions ? translatedCaptionPlan(clip, transcript, segments, captionStyle, w / h, process.platform, timeline?.coldOpenDuration ?? 0) : null,
       // Seams and emphasis exactly as the preview lays them out.
-      ...clipCaptionOptions(clip, timeline ?? new ClipTimeline([{ start, end: clip.edit.end }]), captionStart)
+      ...clipCaptionOptions(clip, captionTimeline, captionStart)
     })
     const dir = join(tmpdir(), 'cutawan')
     await mkdir(dir, { recursive: true })
@@ -1042,7 +1123,8 @@ async function render(job: RenderJob): Promise<RenderResult> {
       focusCommandsPath,
       loudness,
       audioTailSec: speechSafeFade(captionTranscript, captionStart, captionEnd),
-      audioMix
+      audioMix,
+      captionFrames: animated ? { width: w, height: h, fps: captionFps } : null
     }
   )
   // The cold open is opened as one more source input, before the graph's own.
@@ -1126,7 +1208,14 @@ async function render(job: RenderJob): Promise<RenderResult> {
   const runOpts = (from: number, to: number): Parameters<typeof runFfmpegWith>[2] => ({
     onProgress: (t: number) =>
       job.onProgress?.(from + Math.min(1, t / outputDuration) * (to - from)),
-    signal: job.signal
+    signal: job.signal,
+    // Animated captions: every run (both passes of a size-capped export, a
+    // CPU retry) is fed the same frames, drawn afresh from the same plan.
+    ...(animated
+      ? {
+          stdin: (stream) => writeCaptionFrames(animated.session, animated.plan, { width: w, height: h, fps: captionFps }, stream, job.signal)
+        }
+      : {})
   })
 
   const passLogPrefix = plan ? join(tempDir, `x264-${randomUUID()}`) : null
@@ -1185,6 +1274,14 @@ async function render(job: RenderJob): Promise<RenderResult> {
         }
       }
     }
+  } catch (err) {
+    // Any failure with animated captions on is retried with libass by
+    // renderWithCaptionFallback: the animated renderer must never be the
+    // reason an export fails.
+    if (animated && !job.signal?.aborted) {
+      throw err instanceof CaptionRendererError ? err : new CaptionRendererError(err instanceof Error ? err.message : String(err), { cause: err })
+    }
+    throw err
   } finally {
     // Temp files this render created (captions, crop commands, filter script,
     // two-pass stats); never leave them behind.
@@ -1205,5 +1302,37 @@ async function render(job: RenderJob): Promise<RenderResult> {
     Math.abs(exported.durationSec - outputDuration) > Math.max(.25, 2 / Math.max(1, source.fps))) {
     throw new Error('Export validation failed: unexpected dimensions, duration or audio stream.')
   }
-  return { outputPath: job.outputPath, bytes, sizePlan: plan }
+  return { outputPath: job.outputPath, bytes, sizePlan: plan, ...(captionNotice ? { captionNotice } : {}) }
+}
+
+/** The export note for an animated style that had to be burned with libass. */
+function animatedFallbackNotice(styleId: string, error: unknown): string {
+  const style = getCaptionStyle(styleId)
+  const fallback = getCaptionStyle(libassCaptionStyleId(styleId))
+  const reason = error instanceof Error ? error.message.split('\n')[0] : String(error)
+  return captionFallbackNotice(style.name, fallback.name, reason)
+}
+
+/**
+ * Render, and if the animated caption renderer fails part-way (the window
+ * crashed, ffmpeg rejected its frames), render again with the style's libass
+ * equivalent, noting why in the result.
+ */
+async function renderWithCaptionFallback(job: RenderJob): Promise<RenderResult> {
+  const attempt = async (internal: InternalRenderJob): Promise<RenderResult> => {
+    const cleanup: Array<() => void> = []
+    try {
+      return await render(internal, cleanup)
+    } finally {
+      for (const close of cleanup) close()
+    }
+  }
+  try {
+    return await attempt(job)
+  } catch (error) {
+    if (!(error instanceof CaptionRendererError) || job.signal?.aborted) throw error
+    console.error('Animated captions failed during the export, burning the libass equivalent:', error)
+    await rm(job.outputPath, { force: true }).catch(() => undefined)
+    return attempt({ ...job, forceLibassCaptions: true, captionNotice: animatedFallbackNotice(job.clip.edit.captionStyleId, error) })
+  }
 }

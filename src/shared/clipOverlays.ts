@@ -1,5 +1,5 @@
 import type { BrandColors, Clip, Transcript } from './types'
-import type { CaptionStyle } from './captionStyles'
+import { captionEmojiEnabled, type CaptionStyle } from './captionStyles'
 import { captionGroupsFor, captionLayoutBudget, type CaptionGroupOptions, type WordGroup } from './captionLayout'
 import { timelineTranscript, type ClipTimeline } from './clipTimeline'
 import { planTitle, type TitlePlan } from './titleLayout'
@@ -20,7 +20,7 @@ export function clipCaptionOptions(clip: OverlayClip, timeline: ClipTimeline, or
   return {
     breaks: timeline.hasColdOpen ? [origin + timeline.coldOpenDuration] : [],
     emphasis: clip.edit.emphasis !== false,
-    emoji: clip.edit.emoji === true,
+    emoji: captionEmojiEnabled(clip.edit),
     keywords: clip.emphasis?.words,
     hook: clip.hook
   }

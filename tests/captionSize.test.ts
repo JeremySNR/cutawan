@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assFontSize, buildAss } from '../src/main/pipeline/captions'
 import { parseFontMetrics } from '../src/main/fonts'
-import { CAPTION_STYLES, resolveCaptionStyle } from '@shared/captionStyles'
+import { CAPTION_STYLES, libassCaptionStyleId, resolveCaptionStyle } from '@shared/captionStyles'
 import type { Transcript } from '@shared/types'
 
 const FONTS = join(process.cwd(), 'resources', 'fonts')
@@ -70,7 +70,8 @@ describe('buildAss font sizing', () => {
 
   it('emits the converted size for every preset', () => {
     for (const preset of CAPTION_STYLES) {
-      const style = resolveCaptionStyle(preset.id)
+      // Animated presets burn their libass equivalent.
+      const style = resolveCaptionStyle(libassCaptionStyleId(preset.id))
       const metrics = style.fontFamily.startsWith('Poppins') ? poppins : anton
       const ass = buildAss(transcript(), { ...base, styleId: preset.id, fontMetrics: metrics })
       expect(captionFontSize(ass)).toBe(assFontSize(style.fontScale * base.height, metrics))

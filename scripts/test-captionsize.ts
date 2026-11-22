@@ -129,6 +129,10 @@ async function main(): Promise<void> {
   let checked = 0
   const skipped: string[] = []
   for (const style of CAPTION_STYLES) {
+    // Animated styles are drawn by canvas at the CSS em size in both the
+    // preview and the export (scripts/test-animated-captions.sh checks them);
+    // libass only burns their fallback preset, which is measured on its own.
+    if (style.animation) continue
     const file = FONT_FILES[style.fontFamily]
     if (!file) continue
     // Measuring optically means the glyph colour has to stand apart from the

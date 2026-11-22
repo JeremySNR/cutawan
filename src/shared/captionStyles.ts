@@ -33,6 +33,33 @@ export interface CaptionStyle {
    * text colour (so the highlight alone would not mark it). Absent = highlight.
    */
   emphasisColor?: string
+  /**
+   * Animated styles are drawn by the canvas renderer (shared/captionCanvas.ts)
+   * in the preview and, for export, in a hidden Chromium window whose frames
+   * ffmpeg composites over the video. Absent = a libass style.
+   */
+  animation?: CaptionAnimation
+}
+
+export type CaptionAnimationKind = 'pop' | 'glide' | 'prism' | 'sweep' | 'spark'
+
+export interface CaptionAnimation {
+  kind: CaptionAnimationKind
+  /**
+   * The libass preset that looks closest, burned in instead whenever the
+   * animated renderer cannot run (no window, a font failed to load...).
+   */
+  fallbackStyleId: string
+  /** Second fill colour: the gradient's lower stop (prism). */
+  secondaryColor?: string
+  /** Soft drop shadow: blur radius and downward offset as fractions of frame height. */
+  shadowBlur: number
+  shadowOffset: number
+  /** "#RRGGBB" shadow colour and its opacity. */
+  shadowColor: string
+  shadowOpacity: number
+  /** Colour emoji are on for this style unless the clip turns them off. */
+  emojiByDefault?: boolean
 }
 
 export const CAPTION_STYLES: CaptionStyle[] = [
@@ -228,8 +255,155 @@ export const CAPTION_STYLES: CaptionStyle[] = [
     bold: false,
     positionY: 0.82,
     wordsPerGroup: 7
+  },
+  // Animated styles: drawn with canvas in the preview and in an offscreen
+  // Chromium window on export (see shared/animatedCaptions.ts).
+  {
+    id: 'pop',
+    name: 'Pop',
+    fontFamily: 'Anton',
+    fontScale: 0.054,
+    uppercase: true,
+    textColor: '#FFFFFF',
+    highlightColor: '#FFD400',
+    highlightBoxColor: null,
+    outlineColor: '#000000',
+    outlineWidth: 3.4,
+    shadow: 0,
+    bold: false,
+    positionY: 0.72,
+    wordsPerGroup: 3,
+    animation: {
+      kind: 'pop',
+      fallbackStyleId: 'beast',
+      shadowBlur: 0.012,
+      shadowOffset: 0.004,
+      shadowColor: '#000000',
+      shadowOpacity: 0.6
+    }
+  },
+  {
+    id: 'glide',
+    name: 'Glide',
+    fontFamily: 'Poppins',
+    fontScale: 0.044,
+    uppercase: false,
+    textColor: '#FFFFFF',
+    highlightColor: '#FFFFFF',
+    highlightBoxColor: '#7C3AED',
+    outlineColor: '#000000',
+    outlineWidth: 2,
+    shadow: 0,
+    bold: true,
+    positionY: 0.74,
+    wordsPerGroup: 4,
+    emphasisColor: '#C4B5FD',
+    animation: {
+      kind: 'glide',
+      fallbackStyleId: 'bubble',
+      shadowBlur: 0.01,
+      shadowOffset: 0.003,
+      shadowColor: '#000000',
+      shadowOpacity: 0.45
+    }
+  },
+  {
+    id: 'prism',
+    name: 'Prism',
+    fontFamily: 'Anton',
+    fontScale: 0.056,
+    uppercase: true,
+    textColor: '#FFFFFF',
+    highlightColor: '#FF6B3D',
+    highlightBoxColor: null,
+    outlineColor: '#2A0E00',
+    outlineWidth: 3,
+    shadow: 0,
+    bold: false,
+    positionY: 0.72,
+    wordsPerGroup: 3,
+    animation: {
+      kind: 'prism',
+      fallbackStyleId: 'ember',
+      secondaryColor: '#FFC53D',
+      shadowBlur: 0.016,
+      shadowOffset: 0.002,
+      shadowColor: '#FF6B3D',
+      shadowOpacity: 0.45
+    }
+  },
+  {
+    id: 'sweep',
+    name: 'Sweep',
+    fontFamily: 'Poppins',
+    fontScale: 0.046,
+    uppercase: false,
+    textColor: '#FFFFFF',
+    highlightColor: '#4ADE80',
+    highlightBoxColor: null,
+    outlineColor: '#000000',
+    outlineWidth: 2.6,
+    shadow: 0,
+    bold: true,
+    positionY: 0.74,
+    wordsPerGroup: 4,
+    animation: {
+      kind: 'sweep',
+      fallbackStyleId: 'karaoke',
+      shadowBlur: 0.01,
+      shadowOffset: 0.003,
+      shadowColor: '#000000',
+      shadowOpacity: 0.5
+    }
+  },
+  {
+    id: 'spark',
+    name: 'Spark',
+    fontFamily: 'Poppins',
+    fontScale: 0.046,
+    uppercase: false,
+    textColor: '#FFFFFF',
+    highlightColor: '#38BDF8',
+    highlightBoxColor: null,
+    outlineColor: '#0B1020',
+    outlineWidth: 2.4,
+    shadow: 0,
+    bold: true,
+    positionY: 0.74,
+    wordsPerGroup: 4,
+    animation: {
+      kind: 'spark',
+      fallbackStyleId: 'neon',
+      shadowBlur: 0.012,
+      shadowOffset: 0.004,
+      shadowColor: '#000000',
+      shadowOpacity: 0.55,
+      emojiByDefault: true
+    }
   }
 ]
+
+/** True for a style drawn by the animated (canvas) renderer. */
+export function isAnimatedCaptionStyle(id: string | null | undefined): boolean {
+  return Boolean(id && CAPTION_STYLES.find((s) => s.id === id)?.animation)
+}
+
+/**
+ * The preset libass burns for `id`: the style itself, or an animated style's
+ * nearest libass look.
+ */
+export function libassCaptionStyleId(id: string): string {
+  return getCaptionStyle(id).animation?.fallbackStyleId ?? getCaptionStyle(id).id
+}
+
+/**
+ * Whether a clip draws emoji after some emphasised words: its own toggle when
+ * set, else the style's default (animated styles can draw colour emoji, so
+ * some turn them on; libass styles default to off).
+ */
+export function captionEmojiEnabled(edit: { captionStyleId: string; emoji?: boolean }): boolean {
+  return edit.emoji ?? getCaptionStyle(edit.captionStyleId).animation?.emojiByDefault === true
+}
 
 export const DEFAULT_CAPTION_STYLE_ID = 'beast'
 

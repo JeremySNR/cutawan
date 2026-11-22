@@ -387,6 +387,7 @@ export function registerIpcHandlers(): void {
         outputPath: rendered.outputPath,
         bytes: rendered.bytes,
         ...(rendered.check ? { check: rendered.check } : {}),
+        ...(rendered.captionNotice ? { captionNotice: rendered.captionNotice } : {}),
         ...(sizeTargetBytes !== undefined
           ? {
               sizeTargetBytes,

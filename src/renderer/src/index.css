@@ -22,6 +22,12 @@
   font-family: 'Cutawan Emoji';
   src: url('./assets/fonts/CutawanEmoji.ttf') format('truetype');
 }
+/* Colour emoji subset (Noto Color Emoji) for the animated caption styles,
+   which draw with canvas in the preview and in Chromium on export. */
+@font-face {
+  font-family: 'Cutawan Color Emoji';
+  src: url('./assets/fonts/CutawanColorEmoji.ttf') format('truetype');
+}
 
 /*
  * Near-monochrome dark palette. Hierarchy comes from contrast and subtle

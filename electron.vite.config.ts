@@ -22,6 +22,15 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // The hidden window that draws animated caption frames on export.
+          captionFrames: resolve(__dirname, 'src/preload/captionFrames.ts')
+        }
+      }
+    },
     resolve: {
       alias: {
         '@shared': resolve(__dirname, 'src/shared')
@@ -30,6 +39,14 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          captionFrames: resolve(__dirname, 'src/renderer/caption-frames.html')
+        }
+      }
+    },
     resolve: {
       alias: {
         '@shared': resolve(__dirname, 'src/shared'),
