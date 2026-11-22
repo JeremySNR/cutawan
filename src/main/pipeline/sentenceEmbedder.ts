@@ -6,7 +6,18 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { app } from 'electron'
-import { runInference } from '../inference/client'
+import { createInferenceClient } from '../inference/client'
+
+let topicClient: ReturnType<typeof createInferenceClient> | undefined
+/**
+ * Its own inference child, like diarization's: a failure in the topic model
+ * latches its client until restart, and must not switch off automatic
+ * framing, which uses the shared one.
+ */
+const runInference: ReturnType<typeof createInferenceClient>['run'] = (...args) => {
+  topicClient ??= createInferenceClient()
+  return topicClient.run(...args)
+}
 import type { SentenceEmbedder } from './topics'
 
 /**
@@ -277,7 +288,7 @@ export function meanPool(hidden: Float32Array, mask: number[][], seq: number, di
   })
 }
 
-/** The embedder over a model and vocabulary on disk; inference runs in the shared ONNX child process. */
+/** The embedder over a model and vocabulary on disk; inference runs in its own ONNX child process. */
 export function miniLmEmbedder(modelPath: string, vocab: WordPieceVocab): SentenceEmbedder {
   return {
     id: EMBEDDER_ID,
