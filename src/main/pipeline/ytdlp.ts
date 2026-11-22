@@ -93,6 +93,12 @@ export interface UrlVideoMeta {
   title: string
   durationSec: number
   webpageUrl: string
+  /**
+   * The licence the site reports, e.g. YouTube's "Creative Commons
+   * Attribution license (reuse allowed)". Null when the site reports none,
+   * which on YouTube means the standard licence.
+   */
+  license: string | null
 }
 
 export interface CookieAuthOptions {
@@ -192,10 +198,11 @@ export function cookieCopyErrorHint(browser: BrowserCookieSource, hasCookiesFile
 function runYtDlp(
   binPath: string,
   args: string[],
-  onLine?: (line: string) => void
+  onLine?: (line: string) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(binPath, args, { windowsHide: true })
+    const child = spawn(binPath, args, { windowsHide: true, signal })
     let stdout = ''
     let stderr = ''
     let lineBuf = ''
@@ -263,6 +270,7 @@ interface YtDlpJson {
   duration?: number
   webpage_url?: string
   url?: string
+  license?: string | null
   entries?: YtDlpJson[]
 }
 
@@ -273,7 +281,8 @@ function baseArgs(cookieOpts: CookieAuthOptions): string[] {
 export async function fetchUrlMeta(
   binPath: string,
   url: string,
-  cookieOpts: CookieAuthOptions = {}
+  cookieOpts: CookieAuthOptions = {},
+  signal?: AbortSignal
 ): Promise<UrlVideoMeta> {
   const out = await runYtDlp(binPath, [
     '-J',
@@ -281,7 +290,7 @@ export async function fetchUrlMeta(
     '--no-warnings',
     ...baseArgs(cookieOpts),
     url
-  ])
+  ], undefined, signal)
   let data = JSON.parse(out) as YtDlpJson
 
   // Some sites (e.g. archive.org items with several files) resolve to a
@@ -294,7 +303,8 @@ export async function fetchUrlMeta(
     const main = entries.reduce((a, b) => ((b.duration ?? 0) > (a.duration ?? 0) ? b : a))
     // Prefer the entry's direct media URL: the entry webpage_url often points
     // back at the playlist page, which would re-resolve to all files.
-    data = { ...main, title: main.title ?? data.title, webpage_url: main.url ?? main.webpage_url }
+    data = { ...main, title: main.title ?? data.title, license: main.license ?? data.license,
+      webpage_url: main.url ?? main.webpage_url }
   }
 
   if (!data.duration || data.duration <= 0) {
@@ -304,7 +314,8 @@ export async function fetchUrlMeta(
     id: data.id ?? 'video',
     title: data.title ?? 'Imported video',
     durationSec: data.duration,
-    webpageUrl: data.webpage_url ?? data.url ?? url
+    webpageUrl: data.webpage_url ?? data.url ?? url,
+    license: typeof data.license === 'string' && data.license.trim() ? data.license.trim() : null
   }
 }
 
@@ -315,7 +326,8 @@ export async function downloadUrlVideo(
   url: string,
   outPath: string,
   onProgress: ProgressFn,
-  cookieOpts: CookieAuthOptions = {}
+  cookieOpts: CookieAuthOptions = {},
+  signal?: AbortSignal
 ): Promise<void> {
   await runYtDlp(
     binPath,
@@ -339,6 +351,7 @@ export async function downloadUrlVideo(
       } else if (line.includes('[Merger]')) {
         onProgress({ progress: 0.96, message: 'Merging streams…' })
       }
-    }
+    },
+    signal
   )
 }

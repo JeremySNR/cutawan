@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { TimelineData } from '@shared/types'
 import { runFfmpeg } from './ffmpeg'
+import { pruneDirectory } from './analysisCache'
 
 /**
  * Editor timeline data: a filmstrip of evenly spaced thumbnails plus an audio
@@ -19,6 +20,12 @@ const WAVEFORM_SAMPLE_RATE = 8000
 /** Bump to invalidate previously cached entries when the format changes. */
 const CACHE_VERSION = 1
 const CACHE_MAX_AGE_MS = 14 * 24 * 3600 * 1000
+/**
+ * Total size the cache may reach before the least recently opened windows
+ * go. One window is about 60 KB (16 small JPEGs and a manifest), so this is
+ * a few thousand windows: far more than anyone reopens.
+ */
+const CACHE_MAX_BYTES = 200 * 1024 * 1024
 
 function cacheRoot(): string {
   const base = app?.getPath?.('userData') ?? join(process.cwd(), '.tmp', 'userData')
@@ -49,21 +56,9 @@ export function computeWaveform(pcm: Buffer, buckets: number): number[] {
   return out.map((v) => Math.round((v / peak) * 1000) / 1000)
 }
 
-/** Drop cache entries that have not been touched in a while. */
+/** Drop windows not opened in a while, then the least recently opened past the size bound. */
 async function pruneCache(root: string): Promise<void> {
-  try {
-    const entries = await readdir(root)
-    const now = Date.now()
-    for (const entry of entries) {
-      const dir = join(root, entry)
-      const info = await stat(dir).catch(() => null)
-      if (info && now - info.mtimeMs > CACHE_MAX_AGE_MS) {
-        await rm(dir, { recursive: true, force: true }).catch(() => undefined)
-      }
-    }
-  } catch {
-    /* cache pruning is best-effort */
-  }
+  await pruneDirectory(root, { maxAgeMs: CACHE_MAX_AGE_MS, maxBytes: CACHE_MAX_BYTES })
 }
 
 let prunedThisRun = false
@@ -109,6 +104,9 @@ async function extractTimeline(
   try {
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as TimelineData
     await Promise.all(manifest.frames.map((f) => stat(f)))
+    // Pruning goes by the window's own time: opening it counts as use.
+    const now = new Date()
+    await utimes(dir, now, now).catch(() => undefined)
     return manifest
   } catch {
     /* not cached yet */

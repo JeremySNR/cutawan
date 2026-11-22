@@ -28,6 +28,12 @@ describe('isolated native inference', () => {
     await expect(instance.run('ok', input)).rejects.toThrow('inference process failed')
   })
 
+  it('names the feature that stopped when a dedicated child fails', async () => {
+    const instance = new InferenceClient(join(process.cwd(), 'tests/fixtures/inference-worker.cjs'), [], 3000, 'Speaker detection')
+    clients.push(instance)
+    await expect(instance.run('crash', input)).rejects.toThrow(/^Speaker detection stopped because the inference process failed/)
+  })
+
   it('kills hung inference when cancelled and permits a later request', async () => {
     const instance = client()
     const abort = new AbortController()

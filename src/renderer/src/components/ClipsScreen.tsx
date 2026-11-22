@@ -9,7 +9,9 @@ import {
   FolderOpen,
   FolderCog,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
+  Wrench,
   X
 } from 'lucide-react'
 import { useStore } from '../store'
@@ -18,12 +20,14 @@ import { EditorialExplanation, EditorialRankingSummary, EditorialScore } from '.
 import MissingSourceBanner from './MissingSourceBanner'
 import DiscoverySummary from './DiscoverySummary'
 import { JoinedBadge } from './JoinedMoments'
-import type { Clip, TimeRange } from '@shared/types'
+import type { Clip, ExportCheckReport, TimeRange } from '@shared/types'
+import { exportCheckSummary } from '@shared/exportCheck'
 import { selectedRanges } from '@shared/clipSegments'
 import { findWholeVideoClip, highlightClips } from '@shared/wholeVideo'
-import { editedClipDuration } from '@shared/tighten'
+import { clipTimeline } from '@shared/clipTimeline'
 import { layoutReviewMessage } from '@shared/contentType'
 import { editorialAssessmentCurrent, editorialReportMatchesClips } from '@shared/editorialRanking'
+import { CLIP_KIND_LABELS } from '@shared/clipVariety'
 
 export default function ClipsScreen(): React.JSX.Element {
   const project = useStore((s) => s.project)
@@ -32,6 +36,7 @@ export default function ClipsScreen(): React.JSX.Element {
   const exportDir = useStore((s) => s.exportDir)
   const chooseExportDir = useStore((s) => s.chooseExportDir)
   const goHome = useStore((s) => s.goHome)
+  const setSettingsOpen = useStore((s) => s.setSettingsOpen)
   const [exportingAll, setExportingAll] = useState(false)
 
   if (!project) return <div />
@@ -43,6 +48,8 @@ export default function ClipsScreen(): React.JSX.Element {
   const currentRanking = editorialReportMatchesClips(project)
   const earlierRanking = !!project.editorialRanking && !currentRanking
   const doneCount = clips.filter((c) => exports[c.id]?.status === 'done').length
+  // Only for the run it applied to: a later run without it replaces the note.
+  const personalised = project.personalised?.generationId === project.clipsGenerationId ? project.personalised : null
 
   return (
     <div className="h-full overflow-y-auto">
@@ -57,6 +64,15 @@ export default function ClipsScreen(): React.JSX.Element {
               {earlierRanking ? 'Saved clips from an earlier run; the latest attempt did not replace them.' : currentRanking ? 'Ordered for complete stories, editorial quality and variety.' : 'Saved AI selections.'}
               {' '}Review each clip before exporting; scores estimate editorial quality, not audience performance.
             </p>
+            {personalised && (
+              <p data-testid="personalised-note" className="mt-1 flex items-center gap-1.5 text-xs text-zinc-500">
+                <Sparkles size={12} className="shrink-0 text-accent-400" />
+                Ranking nudged towards clips like the {personalised.positives} you exported or edited.{' '}
+                <button type="button" onClick={() => setSettingsOpen(true)} className="underline decoration-zinc-600 hover:text-zinc-300">
+                  Change in Settings
+                </button>
+              </p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <button
@@ -147,7 +163,8 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
   const entry = exports[clip.id]
   const framing = useStore((s) => s.backgroundReframing[clip.id] === true)
   const transcript = useStore((s) => s.project?.transcript ?? null)
-  const duration = useMemo(() => editedClipDuration(clip, transcript), [clip, transcript])
+  // What the export plays, cold open included.
+  const duration = useMemo(() => clipTimeline(clip, transcript).outputDuration, [clip, transcript])
   const assessmentCurrent = useMemo(() => editorialAssessmentCurrent(clip, transcript), [clip, transcript])
   const videoPath = useStore((s) => s.project?.video.path)
   const [previewing, setPreviewing] = useState(false)
@@ -190,6 +207,14 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
             #{rank}
           </span>
           <EditorialScore clip={clip} current={assessmentCurrent} />
+          {clip.kind && (
+            <span
+              data-testid="clip-kind"
+              className="rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-medium text-zinc-300 backdrop-blur"
+            >
+              {CLIP_KIND_LABELS[clip.kind]}
+            </span>
+          )}
         </div>
         <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5">
           {framing && (
@@ -235,6 +260,8 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
             error={entry?.error}
             bytes={entry?.bytes}
             downscaled={entry?.downscaled}
+            check={entry?.check}
+            captionNotice={entry?.captionNotice}
             onExport={() => void exportClip(clip.id)}
             onCancel={() => void cancelExport(clip.id)}
           />
@@ -290,6 +317,33 @@ function HoverPreview({ src, ranges, onFailed }: {
   )
 }
 
+/**
+ * What the check after export found: "Checked", "1 issue" or "Fixed 1",
+ * with every finding in the tooltip. Absent for exports made before the
+ * check existed.
+ */
+export function ExportCheckBadge({ check }: { check?: ExportCheckReport }): React.JSX.Element | null {
+  const summary = exportCheckSummary(check)
+  if (!summary) return null
+  const tone = summary.issues
+    ? 'bg-amber-500/15 text-amber-300'
+    : summary.repaired
+      ? 'bg-sky-500/15 text-sky-300'
+      : check?.status === 'skipped'
+        ? 'bg-surface-800 text-zinc-400'
+        : 'bg-emerald-500/10 text-emerald-300/90'
+  const Icon = summary.issues ? AlertTriangle : summary.repaired ? Wrench : ShieldCheck
+  return (
+    <span
+      data-testid="export-check"
+      title={summary.detail}
+      className={`flex shrink-0 cursor-default items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-medium ${tone}`}
+    >
+      <Icon size={12} /> {summary.label}
+    </span>
+  )
+}
+
 export function ExportButton({
   status,
   progress,
@@ -297,6 +351,8 @@ export function ExportButton({
   error,
   bytes,
   downscaled,
+  check,
+  captionNotice,
   onExport,
   onCancel
 }: {
@@ -306,6 +362,10 @@ export function ExportButton({
   error?: string
   bytes?: number
   downscaled?: boolean
+  /** The check after the render, shown as a small badge with the details on hover. */
+  check?: ExportCheckReport
+  /** Set when an animated caption style had to be burned with its libass look. */
+  captionNotice?: string
   onExport: () => void
   onCancel: () => void
 }): React.JSX.Element {
@@ -331,18 +391,21 @@ export function ExportButton({
   if (status === 'done' && outputPath) {
     const sizeLabel = bytes !== undefined ? ` · ${formatBytes(bytes)}` : ''
     return (
-      <button
-        onClick={() => void window.cutawan.showItemInFolder(outputPath)}
-        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-xs font-medium text-emerald-400 transition hover:bg-emerald-500/25"
-        title={
-          downscaled
-            ? `${outputPath} — scaled down to fit the size limit`
-            : outputPath
-        }
-      >
-        <Check size={13} /> Saved{sizeLabel}
-        <FolderOpen size={13} />
-      </button>
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+        <button
+          onClick={() => void window.cutawan.showItemInFolder(outputPath)}
+          className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-xs font-medium text-emerald-400 transition hover:bg-emerald-500/25"
+          title={[
+            downscaled ? `${outputPath} — scaled down to fit the size limit` : outputPath,
+            captionNotice
+          ].filter(Boolean).join('\n')}
+        >
+          <Check size={13} /> Saved{sizeLabel}
+          <FolderOpen size={13} />
+          {captionNotice && <AlertTriangle size={12} className="text-amber-400" aria-label={captionNotice} />}
+        </button>
+        <ExportCheckBadge check={check} />
+      </div>
     )
   }
   if (status === 'error') {

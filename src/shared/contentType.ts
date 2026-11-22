@@ -122,9 +122,37 @@ export function protectLayoutRanges(
   }
 }
 
+/**
+ * How far a trim edge may sit outside the analysed footage and still reuse
+ * that analysis (see needsReframe in reframe.ts, which re-exports it).
+ */
+export const REFRAME_EXTENSION_TOLERANCE_SEC = 1.5
+
+/**
+ * Whether the layout covers the trim once its edge shots are stretched by up
+ * to REFRAME_EXTENSION_TOLERANCE_SEC: a small outward drag keeps the layout.
+ */
+function layoutCoversWithTolerance(assessment: Clip['visualLayout'], start: number, end: number): boolean {
+  if (!assessment) return false
+  const tol = REFRAME_EXTENSION_TOLERANCE_SEC
+  if (start < assessment.start - tol || end > assessment.end + tol) return false
+  const inner = { start: Math.max(start, assessment.start), end: Math.min(end, assessment.end) }
+  return inner.end > inner.start && validLayoutShots(assessment, inner.start, inner.end)
+}
+
 /** Manual framing and layout choices always override automatic shot composition. */
 export function automaticLayoutShots(clip: Pick<Clip, 'edit' | 'visualLayout'>): NonNullable<NonNullable<Clip['visualLayout']>['shots']> {
   if (clip.edit.framing !== 'auto' || clip.edit.reframeMode !== 'crop' || clip.edit.aspect === 'original') return []
+  if (!validLayoutShots(clip.visualLayout, clip.edit.start, clip.edit.end) &&
+    layoutCoversWithTolerance(clip.visualLayout, clip.edit.start, clip.edit.end)) {
+    // The edge shots hold for the few extra frames, as the focus track does.
+    const layout = clip.visualLayout!
+    const shots = layout.shots!.map((shot, i, all) => ({ ...shot,
+      start: i === 0 ? Math.min(shot.start, clip.edit.start) : shot.start,
+      end: i === all.length - 1 ? Math.max(shot.end, clip.edit.end) : shot.end }))
+    return automaticLayoutShots({ ...clip, visualLayout: { ...layout,
+      start: Math.min(layout.start, clip.edit.start), end: Math.max(layout.end, clip.edit.end), shots } })
+  }
   if (!validLayoutShots(clip.visualLayout, clip.edit.start, clip.edit.end)) {
     return clip.visualLayout?.preserveContext ? [{ start: clip.edit.start, end: clip.edit.end, mode: 'fit',
       review: { status: 'needs-review', reason: 'Layout does not cover this trim; full source retained. Adjust source regions or choose a layout.' } }] : []

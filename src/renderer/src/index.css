@@ -16,6 +16,18 @@
   src: url('./assets/fonts/Poppins-Medium.ttf') format('truetype');
   font-weight: 500;
 }
+/* Outline emoji subset for captions: libass cannot draw colour emoji, so the
+   export and the preview both draw these glyphs tinted like the text. */
+@font-face {
+  font-family: 'Cutawan Emoji';
+  src: url('./assets/fonts/CutawanEmoji.ttf') format('truetype');
+}
+/* Colour emoji subset (Noto Color Emoji) for the animated caption styles,
+   which draw with canvas in the preview and in Chromium on export. */
+@font-face {
+  font-family: 'Cutawan Color Emoji';
+  src: url('./assets/fonts/CutawanColorEmoji.ttf') format('truetype');
+}
 
 /*
  * Near-monochrome dark palette. Hierarchy comes from contrast and subtle

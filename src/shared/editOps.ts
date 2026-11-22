@@ -94,11 +94,36 @@ export function toggleActiveGap(edit: ClipEditState, pause: TimeRange): ClipEdit
  * Clicking a pause that pause removal takes out. One the user removed
  * despite its activity goes back to being kept automatically, so the two
  * clicks are an exact toggle; any other pause is restored as before.
+ *
+ * `active` is the clip's measured active pauses (`gapActivity.active`). A
+ * removal choice counts only while it still names one of them: after a
+ * re-measurement an old entry can overlap a pause with nothing active in
+ * it, and dropping that entry would change nothing on screen. Such stale
+ * entries are cleared and the pause is restored, so the click always does
+ * what the timeline shows. Without `active` the entry is trusted as before.
  */
-export function toggleRemovedPause(edit: ClipEditState, pause: TimeRange): ClipEditState {
-  return (edit.removedActive ?? []).some(r => r.start < pause.end && r.end > pause.start)
-    ? toggleActiveGap(edit, pause)
-    : toggleRestored(edit, pause)
+export function toggleRemovedPause(edit: ClipEditState, pause: TimeRange, active?: TimeRange[]): ClipEditState {
+  const overlaps = (r: TimeRange): boolean => r.start < pause.end && r.end > pause.start
+  const removed = (edit.removedActive ?? []).filter(overlaps)
+  if (!removed.length) return toggleRestored(edit, pause)
+  const live = active === undefined || removed.some(r => active.some(a => a.start < r.end && a.end > r.start && overlaps(a)))
+  if (live) return toggleActiveGap(edit, pause)
+  return toggleRestored({ ...edit, removedActive: (edit.removedActive ?? []).filter(r => !removed.includes(r)) }, pause)
+}
+
+/**
+ * Drop removal choices (`edit.removedActive`) that no longer overlap any
+ * measured active pause. Called when gap activity is re-measured; returns
+ * the same object when nothing is stale, so callers can compare by identity.
+ */
+export function pruneRemovedActive(edit: ClipEditState, active: TimeRange[]): ClipEditState {
+  const removed = edit.removedActive
+  if (!removed?.length) return edit
+  const kept = removed.filter(r => active.some(a => a.start < r.end && a.end > r.start))
+  if (kept.length === removed.length) return edit
+  if (kept.length) return { ...edit, removedActive: kept }
+  const { removedActive: _dropped, ...rest } = edit
+  return rest
 }
 
 /**

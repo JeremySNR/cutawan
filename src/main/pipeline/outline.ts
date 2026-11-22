@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { Sentence } from '@shared/sentences'
 import { throwIfSubscriptionError, usesSubscription } from '../subscription'
 import { mapLimit } from './concurrency'
+import { pruneDirectory } from './analysisCache'
 import { chatApiBase, chatJSON } from './openai'
 
 /**
@@ -87,6 +88,8 @@ const MAX_LABEL_CHARS = 160
 const MAX_REASON_CHARS = 400
 /** Parts mapped at once; the same as clip selection's windows. */
 const OUTLINE_CONCURRENCY = 3
+/** Outlines kept per project; the least recently written beyond this go. */
+const OUTLINE_CACHE_ENTRIES = 8
 /** A cached outline larger than this is not read (a two-hour outline is a few tens of KB). */
 const MAX_CACHE_BYTES = 1_000_000
 
@@ -332,6 +335,9 @@ async function writeCachedOutline(dir: string, path: string, key: string, outlin
     await writeFile(temporary, JSON.stringify({ key, outline }), { signal })
     signal?.throwIfAborted()
     await rename(temporary, path)
+    // One file per transcript and model: regenerating with other models, or
+    // after a transcript edit, would otherwise pile them up in the project.
+    await pruneDirectory(dir, { maxEntries: OUTLINE_CACHE_ENTRIES, match: name => name.startsWith('outline-') })
   } catch (err) {
     signal?.throwIfAborted()
     // A cache that cannot be written costs the next run its requests, nothing more.

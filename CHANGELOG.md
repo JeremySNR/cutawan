@@ -6,6 +6,54 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
+## [Unreleased]
+
+Clips you can take further: translated captions and AI voice dubs, timelines you can open in Premiere Pro, DaVinci Resolve or Final Cut Pro, a cold open, sound and music, and a check of every export. Clip finding now hears who is speaking and how the audience reacts.
+
+### Added
+
+- **Animated captions.** Five new caption styles that move: **Pop** (each word springs in as it is said), **Glide** (a highlight box slides from word to word), **Prism** (gradient text with a glow), **Sweep** (colour fills each word over the time it is spoken) and **Spark** (the card springs up and colour emoji bounce in). Find them under **Animated** in the style picker, each with a live sample. They work with emphasis, emoji, brand colours, your own fonts, hook titles and translated captions, and the preview matches the export. Exports with them take about a third longer. If an animated style cannot be drawn on your computer, the export uses the nearest standard style and says so.
+- **Translate captions.** In the editor, translate a clip's captions into another language with one AI request. Review every line next to the original, edit any of them, and list names or catchphrases to keep unchanged. Show the original captions, the translation, or both. Preview and export match.
+- **Dub with an AI voice.** Once a translation is accepted, voice it with an OpenAI voice (on API and OpenRouter connections). Each line plays in its sentence's time slot over the original audio, which is turned down underneath. Lines that run long are re-voiced faster, sped up slightly, and, if still too long, reworded shorter for the voice while the captions keep the full translation. The estimate shows the cost before you start, and voiced lines are cached, so editing one line re-voices only that line.
+- **Open your clip in Premiere Pro, DaVinci Resolve or Final Cut Pro.** Export a clip as an edit timeline (FCPXML for Final Cut Pro, XML for Premiere Pro and Resolve) with the source video and every cut in place, plus an SRT of the captions, so you can finish it in your own editor.
+- **Cold open.** Optionally replay the clip's strongest short line in the first seconds, then cut to the start: the hook a viewer hears before the story begins.
+- **Sound effects and background music.** A whoosh on cuts and a pop on the title, and music from a folder of tracks you have the rights to (Settings → Export), mixed under the voice and lowered while someone speaks.
+- **Caption emphasis and emoji.** Key words (numbers, names and strong words, or the ones the AI review picked) get the caption style's highlight colour, and an emoji can follow some of them.
+- **Hook title styles.** The title at the start of a clip comes as a card, bold text or a banner.
+- **Batch queue.** Paste several links, or add several files, and Cutawan imports and analyses them one after another. The queue survives a restart and comes back paused, so it never spends API requests without being asked.
+- **Personalised ranking (optional).** Cutawan notes which clips you export or edit and, once you have kept enough of them, leans scores towards what you keep: more hook, more value, a length you prefer. Kept on your computer only; turn it off or forget everything in Settings.
+- **A check of every export.** After each render Cutawan measures the file: black picture or silence at the start or end, freezes and black frames the source does not have, loudness, peaks, and cuts that land mid-word. Safe fixes (trimming dead air at the ends, correcting the loudness) are made automatically; anything else is reported next to the export.
+
+### Improved
+
+- **Clip finding knows who is speaking.** Speaker turns are worked out on your computer (a ~30 MB speaker model is downloaded the first time), so the AI sees where one person stops and another starts. Question-and-answer clips start on the question and do not end halfway through a reply. [How it works](docs/speaker-diarization.md).
+- **Clip finding hears the audience.** Laughter, applause and other reactions are detected from the audio, so the AI knows which lines landed, and a clip that ends on a laugh keeps a beat of it.
+- **More varied clips.** Each clip is labelled as a story, insight, opinion, funny moment, emotional moment or explainer, and the order mixes them instead of stacking five similar clips at the top.
+- **Clips stay on one topic.** Topic changes are found on your computer from what is said, so a clip does not run from one subject into the next.
+- **Advice for the kind of video.** The AI gets guidance suited to podcasts, interviews, webinars, lectures, streams and so on, picked from the video type on the setup screen.
+- **Retakes are removed.** When a speaker restarts a sentence or says it again almost word for word, only the last take is kept. Removed takes show on the timeline like removed pauses; click one to put it back.
+- **Better thumbnails.** Each clip's thumbnail is chosen from several candidate frames, preferring sharp, well-exposed frames over blinks and motion blur.
+- **Faster re-runs.** Source analysis (voice activity, motion, sound) is saved, so regenerating clips or reopening a project does not repeat it.
+- **Imported links that are not marked for reuse** show a reminder to make sure you have the rights to clip them. Nothing is blocked.
+
+### Fixed
+
+- Pauses inside a sentence that removal had cut, and choices about pauses that no longer exist after a trim, no longer linger.
+- Small trims next to an already framed clip reuse its framing instead of analysing it again.
+
+### Costs and limits
+
+- Caption translation is one AI request per clip, made when you ask for it. On ChatGPT sign-in it counts against the day's requests.
+- Dubbing is billed by your provider per character voiced, shown before you start; a line too long for its slot adds one request to shorten it. Dubbing is not available on ChatGPT sign-in or local-only setups, which have no speech model.
+- Speaker turns, audience reactions, topics and thumbnails run on your computer and use no AI requests. The speaker model and the topic model are downloaded once; if either cannot be fetched, clip finding works as before without it.
+
+### Validation
+
+- Translation and dubbing were checked live against OpenAI (gpt-5.4-mini for translation, gpt-4o-mini-tts for the voice) on a 25-second two-voice clip: the Spanish translation kept the protected term, and after the fitting changes in this release the dub fit four of its six lines at natural or slightly faster pace. The two that are still cut short sit in slots no voice could fill, one of them cut off by the clip end after 0.3 seconds.
+- Speaker turns were checked on a synthetic two-voice podcast made with two different TTS voices: 95.2% of spoken time went to the right speaker. Audience reactions were tuned on synthetic sources and that podcast; the live check found that real speech onsets and stressed syllables were being read as reactions, and both were fixed. Thresholds for both should be checked on more real recordings.
+- Clip finding with speaker turns and reactions marked was run live on a synthetic 52-minute podcast and produced stable, sensible clips.
+- Automated tests cover every new feature, including preview and export matching for captions, emphasis, cold open, title, sound and dub, and real ffmpeg renders of dubbed and cold-opened clips. These do not measure audience performance.
+
 ## [0.15.0] - 2026-11-22
 
 The biggest update to how Cutawan finds and cuts clips since the first release: better picks from long videos, clips that can join separate moments, smoother cuts, and scores you can read.

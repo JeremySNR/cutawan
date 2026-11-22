@@ -1,6 +1,6 @@
 import type { Clip, TimeRange, Transcript } from './types'
 import { sourceStretches } from './clipSegments'
-import { computeKeptSegments, isFiller, normalizeRanges, subtractRanges, type TightenClip } from './tighten'
+import { computeKeptSegments, isFiller, normalizeRanges, retakeRanges, subtractRanges, type TightenClip } from './tighten'
 
 /**
  * "Gap activity": should a silent pause survive pause removal because
@@ -9,7 +9,7 @@ import { computeKeptSegments, isFiller, normalizeRanges, subtractRanges, type Ti
  * or sting with no words is cut like dead air. Each gap pause removal would
  * cut is judged on two signals, both relative to the rest of the clip:
  *
- * - picture motion, from a 4 fps, 64x36 grayscale decode;
+ * - picture motion, from a 4 fps, 64x36 grayscale decode, lightly blurred;
  * - sound level, from an 8 kHz mono decode, against the clip's speech level.
  *
  * Everything here is pure; main/pipeline/gapActivity.ts does the decoding.
@@ -19,7 +19,8 @@ import { computeKeptSegments, isFiller, normalizeRanges, subtractRanges, type Ti
  * kept in a short clip is the worse failure.
  */
 
-export const GAP_ACTIVITY_VERSION = 1
+/** Bumped when the measurement changes (2: frames blurred before differencing). */
+export const GAP_ACTIVITY_VERSION = 2
 
 /** Gaps shorter than this are not measured: keeping one would barely show. */
 export const MIN_MEASURED_GAP_SEC = 0.6
@@ -33,6 +34,8 @@ const FILLER_PAD_SEC = 0.15
  * re-measure sees every gap again. Leaves out:
  * - stretches that are cut only because a filler word was removed ("um"
  *   plus its padding): keeping them would bring the "um" back;
+ * - retakes (a restarted or repeated sentence): they are speech, so they
+ *   would always measure as loud, and keeping them would undo the removal;
  * - what the user cut, including the skipped middle of a joined clip.
  */
 export function measurableGaps(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript): TimeRange[] {
@@ -45,7 +48,8 @@ export function measurableGaps(clip: Pick<Clip, 'edit' | 'visualStory'>, transcr
     .filter(w => w.end > start && w.start < end && isFiller(w.sourceText ?? w.text))
     .map(w => ({ start: w.start - FILLER_PAD_SEC, end: w.end + FILLER_PAD_SEC })), start, end)
   const cuts = normalizeRanges(clip.edit.cuts, start, end)
-  return subtractRanges(subtractRanges(removed, fillers), cuts)
+  const retakes = retakeRanges(transcript, start, end)
+  return subtractRanges(subtractRanges(subtractRanges(removed, fillers), retakes), cuts)
     .filter(r => r.end - r.start >= MIN_MEASURED_GAP_SEC)
 }
 
@@ -83,27 +87,35 @@ export const MOTION_WIDTH = 64
 export const MOTION_HEIGHT = 36
 
 /**
- * Per-pixel differences up to this many grey levels are treated as noise.
- * A static still with heavy temporal grain (noise=alls=25, CRF 30) measures
- * a plain mean absolute difference of 0.86-1.08 at 64x36, and exactly 0.00
- * once 4 levels are cored off; real motion loses little to it.
+ * Per-pixel differences up to this many grey levels are treated as noise,
+ * after the blur below. Measured at 64x36, as the plain mean absolute
+ * difference of blurred frames, a static still with heavy temporal grain
+ * (noise=alls=25, CRF 30) reads 0.43-0.54 and a worse one (alls=40 at CRF
+ * 38, blocks shimmering) 0.65-1.31; with 3 levels cored off they read 0.00
+ * and 0.00-0.12. Without the blur the second still reads 0.02-0.15 even
+ * with 4 levels cored off, which is why both changed together: the blur
+ * takes the shimmer, so the core can be lower and keep more real motion.
  */
-const MOTION_CORE = 4
+const MOTION_CORE = 3
 /**
  * A frame step "moves" when its cored difference reaches this. Measured
- * (cored, per 0.25 s step): static or grainy still 0.00; a face-sized box
- * swaying 8 px on a detailed still 0.00-0.58; a 20 px nod 0.15-1.17,
- * alternating; a hand-sized (2% of frame) object moving about 0.5-3.5; a
- * person-sized box crossing the frame ~7; a slow 60 px/s screen scroll
- * 0.9-1.9; the moving test card (testsrc2) 1.8-6.
+ * (blurred, cored, per 0.25 s step, 1280x720 x264 at CRF 30, min/median/max):
+ * static or grainy still 0.00; shimmering grain at CRF 38 0.00/0.00/0.12; a
+ * face-sized box swaying 8 px on a detailed still 0.00/0.11/0.30; a 20 px
+ * nod 0.01/0.24/0.84; a hand-sized (2% of frame) object moving
+ * 0.32/0.89/1.62; a person-sized box crossing the frame 1.34/5.26/14.6; a
+ * slow 60 px/s screen scroll 0.86/1.41/1.99; the moving test card
+ * (testsrc2) 1.52/2.17/4.71. (Before the blur, with a 4-level core and a
+ * 1.0 bar: hand 0.40/0.97/1.68, scroll 1.33/2.07/3.28, nod up to 0.99.)
  */
-const MOTION_MIN = 1.0
+const MOTION_MIN = 0.9
 /**
  * …and at least this multiple of the clip's typical motion while speaking.
  * A handheld camera or a gesturing speaker moves all through the clip; a
  * pause is only "active" when it moves clearly more than the talking does.
- * (A ±3 px handshake on the sharp test card measures 0-3, median ~0.9: the
- * baseline lifts the bar above it.)
+ * (A ±3 px handshake on the sharp test card measures 0.04/0.79/1.55 — it
+ * was 0.36/1.47/2.31 before the blur — and the baseline lifts the bar above
+ * it.)
  */
 const MOTION_BASELINE_RATIO = 2.5
 /**
@@ -114,8 +126,32 @@ const MOTION_RUN = 3
 /** Padding around the moving stretch: one sample period either side. */
 const MOTION_PAD_SEC = 1 / MOTION_FPS
 
+/**
+ * A light blur, applied to every frame before differencing: a 3x3 binomial
+ * kernel ([1 2 1] each way, edges clamped). Compression shimmer — blocks and
+ * ringing that flicker from frame to frame on a still picture — is high
+ * frequency and averages out; anything big enough to be a real movement at
+ * 64x36 barely changes.
+ */
+export function blurFrame(frame: ArrayLike<number>, width: number, height: number): Float32Array {
+  const across = new Float32Array(width * height)
+  for (let y = 0; y < height; y++) {
+    const row = y * width
+    for (let x = 0; x < width; x++) {
+      const left = frame[row + Math.max(0, x - 1)], right = frame[row + Math.min(width - 1, x + 1)]
+      across[row + x] = (left + 2 * frame[row + x] + right) / 4
+    }
+  }
+  const out = new Float32Array(width * height)
+  for (let y = 0; y < height; y++) {
+    const up = Math.max(0, y - 1) * width, down = Math.min(height - 1, y + 1) * width, row = y * width
+    for (let x = 0; x < width; x++) out[row + x] = (across[up + x] + 2 * across[row + x] + across[down + x]) / 4
+  }
+  return out
+}
+
 /** Mean absolute difference of two grayscale frames, ignoring noise-level changes. */
-export function frameDifference(a: Uint8Array, b: Uint8Array): number {
+export function frameDifference(a: ArrayLike<number>, b: ArrayLike<number>): number {
   const n = Math.min(a.length, b.length)
   if (!n) return 0
   let sum = 0

@@ -1,23 +1,27 @@
 import { join } from 'node:path'
 import { app } from 'electron'
-import type { Transcript, BrandColors } from '@shared/types'
-import { resolveCaptionStyle, type CaptionStyle } from '@shared/captionStyles'
+import type { Transcript, BrandColors, CaptionEmphasisWord, TitleStyleId } from '@shared/types'
+import { captionEmphasisLook, libassCaptionStyleId, resolveCaptionStyle, type CaptionStyle } from '@shared/captionStyles'
 import { captionPositionAt, type CaptionPositionRange } from '@shared/contentRegion'
+import { CAPTION_EMOJI_FONT, EMOJI_EM, EMPHASIS_SCALE } from '@shared/captionEmphasis'
+import { planTitle, type TitlePlan } from '@shared/titleLayout'
 import type { FontMetrics } from '../fonts'
 import {
   CAPTION_SAFE_WIDTH,
+  captionGroupsFor,
   captionLayoutBudget,
   captionWordText,
   groupDisplayEnd,
-  groupWords,
-  wordsInRange,
   type WordGroup
 } from '@shared/captionLayout'
+import type { TranslatedCaptionPlan } from '@shared/captionTranslation'
+import { buildTranslatedAssEvents } from './translatedCaptions'
 
 /**
- * Bundled caption fonts (Anton, Poppins — OFL licensed) so exports render
- * identically on every OS instead of falling back to system fonts.
- * `app` is undefined when running outside Electron (test scripts).
+ * Bundled caption fonts (Anton, Poppins, the Cutawan Emoji subset — OFL
+ * licensed) so exports render identically on every OS instead of falling
+ * back to system fonts. `app` is undefined when running outside Electron
+ * (test scripts).
  */
 export function fontsDir(): string {
   if (app?.isPackaged) return join(process.resourcesPath, 'fonts')
@@ -63,27 +67,40 @@ function escapeAss(text: string): string {
   return text.replace(/\\/g, '').replace(/[{}]/g, '').replace(/\n/g, ' ')
 }
 
-function renderGroupText(group: WordGroup, activeIndex: number, style: CaptionStyle): string {
+/**
+ * Metrics of the bundled emoji font (resources/fonts/CutawanEmoji.ttf: Noto
+ * Emoji's win ascent 1900 + descent 500 over 2048 units). Fixed because the
+ * file is ours; tests/fonts.test.ts checks them against the file.
+ */
+export const EMOJI_FONT_METRICS: FontMetrics = { unitsPerEm: 2048, winSpan: 2400 }
+
+function renderGroupText(group: WordGroup, activeIndex: number, style: CaptionStyle, emojiFontSize: number): string {
   const highlight = assColor(style.highlightColor)
   const base = assColor(style.textColor)
+  const look = captionEmphasisLook(style)
+  const emphasisColor = assColor(look.color)
+  const big = Math.round(EMPHASIS_SCALE * 100)
   const lines: string[] = []
   let index = 0
   for (const line of group.lines) {
     const parts: string[] = []
     for (const word of line) {
       const text = escapeAss(captionWordText(word.text, style))
-      if (index === activeIndex) {
-        const pop = '\\t(0,70,\\fscx109\\fscy109)'
-        if (style.highlightBoxColor) {
-          // Fat outline in the pill colour approximates a rounded label.
-          const pill = assColor(style.highlightBoxColor)
-          parts.push(`{\\c${highlight}\\bord10\\3c${pill}\\fscx100\\fscy100${pop}}${text}{\\r}`)
-        } else {
-          parts.push(`{\\c${highlight}\\fscx100\\fscy100${pop}}${text}{\\r}`)
-        }
-      } else {
-        parts.push(`{\\c${base}}${text}{\\r}`)
+      const active = index === activeIndex
+      const emphasised = index === group.emphasis
+      // The active word pops to 109% of whatever size it rests at.
+      const rest = emphasised ? big : 100
+      const pop = active ? `\\t(0,70,\\fscx${Math.round(rest * 1.09)}\\fscy${Math.round(rest * 1.09)})` : ''
+      const scale = emphasised || active ? `\\fscx${rest}\\fscy${rest}` : ''
+      const color = active ? highlight : emphasised ? emphasisColor : base
+      // Fat outline in the pill colour approximates a rounded label.
+      const boxColor = active ? style.highlightBoxColor : emphasised ? look.boxColor : null
+      const box = boxColor ? `\\bord10\\3c${assColor(boxColor)}` : ''
+      let part = `{\\c${color}${box}${scale}${pop}}${text}{\\r}`
+      if (emphasised && group.emoji) {
+        part += ` {\\fn${CAPTION_EMOJI_FONT}\\fs${emojiFontSize}\\c${emphasisColor}}${group.emoji}{\\r}`
       }
+      parts.push(part)
       index++
     }
     lines.push(parts.join(' '))
@@ -100,6 +117,11 @@ function assStyleColorWithAlpha(hex: string, alphaHex: string): string {
   const g = clean.slice(2, 4)
   const b = clean.slice(4, 6)
   return `&H${alphaHex}${b}${g}${r}`.toUpperCase()
+}
+
+/** Opacity 0..1 as the two hex digits of an ASS alpha (00 = opaque). */
+function assAlpha(opacity: number): string {
+  return Math.round((1 - Math.max(0, Math.min(1, opacity))) * 255).toString(16).padStart(2, '0').toUpperCase()
 }
 
 /**
@@ -136,22 +158,68 @@ export interface CaptionOptions {
    * Null falls back to `DEFAULT_WIN_SPAN_RATIO`.
    */
   fontMetrics?: FontMetrics | null
-  /** Clip boundaries in source-video seconds; events are re-based to 0. */
+  /** Clip boundaries in the transcript's timeline; events are re-based to 0. */
   clipStart: number
   clipEnd: number
-  /** Optional title overlaid near the top for the first seconds of the clip. */
+  /** Optional hook title shown near the top for the first seconds. */
   title?: string
+  /** Look of the hook title (shared/titleLayout.ts); absent = card. */
+  titleStyle?: TitleStyleId | null
+  /** Second (after clipStart) the title appears, e.g. after a cold open. */
+  titleStart?: number
   /** Custom font family overriding the style's font (must exist in fontsdir). */
   fontFamily?: string
   /** App-wide brand palette merged onto the caption preset. */
   brandColors?: BrandColors | null
-  /** Source-time layout bands that keep captions clear of enlarged detail. */
+  /** Layout bands that move captions (detail views, faces, burned-in text), in the transcript's timeline. */
   positionRanges?: CaptionPositionRange[]
+  /** Translated captions to draw (translatedCaptions.ts); absent = original only. */
+  translation?: TranslatedCaptionPlan | null
+  /** Seams no caption group may span (a cold open's end), in the transcript's timeline. */
+  breaks?: number[]
+  /** Mark each group's key word (see shared/captionEmphasis.ts). */
+  emphasis?: boolean
+  /** Draw an occasional emoji after an emphasised word. */
+  emoji?: boolean
+  /** Validated AI keywords; absent uses the heuristic. */
+  keywords?: CaptionEmphasisWord[] | null
+  /** The clip's hook line, for the emphasis heuristic. */
+  hook?: string
+}
+
+/** The hook title as an ASS style line plus its dialogue event. */
+function titleAss(plan: TitlePlan, opts: CaptionOptions): { style: string; event: string } {
+  const fontSize = assFontSize(plan.fontScale * opts.height, opts.fontMetrics ?? null)
+  const text = assStyleColor(plan.textColor)
+  const boxed = plan.boxColor !== null
+  const outline = boxed
+    ? assStyleColorWithAlpha(plan.boxColor!, assAlpha(plan.boxOpacity))
+    : assStyleColor(plan.outlineColor)
+  // Soft shadow: black at ~44% opacity.
+  const shadowColor = '&H90000000'
+  const border = boxed
+    ? Math.max(6, Math.round(opts.height * plan.boxPad))
+    : Math.max(2, Math.round(opts.height * plan.outlineWidth))
+  const shadow = Math.max(2, Math.round(opts.height * 0.0032))
+  // BorderStyle 3 draws an opaque box per line in the outline colour (the
+  // card/banner label); 1 is outlined text (bold).
+  const style = `Style: Title,${plan.fontFamily},${fontSize},${text},${text},${outline},${shadowColor},-1,0,0,0,100,100,0,0,${boxed ? 3 : 1},${border},${shadow},8,0,0,0,1`
+  const accent = assColor(plan.accentColor)
+  const base = assColor(plan.textColor)
+  const body = plan.lines
+    .map((line) => line.map((w) => (w.accent ? `{\\c${accent}}${escapeAss(w.text)}{\\c${base}}` : escapeAss(w.text))).join(' '))
+    .join('\\N')
+  const x = Math.round(opts.width / 2)
+  const y = Math.round(plan.top * opts.height)
+  const event = `Dialogue: 1,${assTime(plan.start)},${assTime(plan.end)},Title,,0,0,0,,{\\an8\\q2\\pos(${x},${y})\\fad(200,300)}${body}`
+  return { style, event }
 }
 
 export function buildAss(transcript: Transcript, opts: CaptionOptions): string {
-  const style = resolveCaptionStyle(opts.styleId, opts.brandColors, opts.fontFamily)
+  // libass cannot draw the animated styles; it burns their nearest look.
+  const style = resolveCaptionStyle(libassCaptionStyleId(opts.styleId), opts.brandColors, opts.fontFamily)
   const fontSize = assFontSize(style.fontScale * opts.height, opts.fontMetrics ?? null)
+  const emojiFontSize = assFontSize(style.fontScale * opts.height * EMOJI_EM, EMOJI_FONT_METRICS)
   // Captions are positioned per event with \an5\pos so the block is centred on
   // the style's anchor line exactly as the preview centres it (translateY -50%).
   // A bottom-aligned style with MarginV would grow upwards from that line and
@@ -160,26 +228,21 @@ export function buildAss(transcript: Transcript, opts: CaptionOptions): string {
   const marginH = Math.round(opts.width * (1 - CAPTION_SAFE_WIDTH) / 2)
   const primary = assStyleColor(style.textColor)
   const outline = assStyleColor(style.outlineColor)
-  const brandColors = opts.brandColors
-  const hookText = assStyleColor(
-    brandColors?.enabled ? brandColors.hookTextColor : '#FFFFFF'
-  )
-  const titleBox = brandColors?.enabled
-    ? assStyleColorWithAlpha(brandColors.hookBackgroundColor, '40')
-    : '&H40000000'
-  /** Soft shadow: black at ~44% opacity. */
-  const titleShadowColor = '&H90000000'
+  const clipDur = opts.clipEnd - opts.clipStart
 
-  // Hook "card": a filled, translucent rounded-feel label at the top. libass
-  // draws this with BorderStyle 3 (opaque box in the outline colour) plus a
-  // soft drop shadow (back colour), which reads as a modern hook overlay
-  // instead of bare floating text. Sized independently of the caption style so
-  // the hook stays prominent and legible whatever caption preset is chosen.
-  const titleFontSize = assFontSize(opts.height * 0.044, opts.fontMetrics ?? null)
-  const titleMarginV = Math.round(opts.height * 0.07)
-  const titleMarginH = Math.round(opts.width * 0.1)
-  const titleBoxPad = Math.max(6, Math.round(opts.height * 0.009))
-  const titleShadow = Math.max(2, Math.round(opts.height * 0.0032))
+  // The hook title: look, balanced lines and safe-area placement come from the
+  // shared planner the preview uses.
+  const titlePlan = opts.title && opts.title.trim().length > 0
+    ? planTitle(opts.title, {
+        styleId: opts.titleStyle,
+        captionStyle: style,
+        brandColors: opts.brandColors,
+        aspectRatio: opts.width / opts.height,
+        start: Math.max(0, opts.titleStart ?? 0),
+        duration: clipDur
+      })
+    : null
+  const title = titlePlan ? titleAss(titlePlan, opts) : null
 
   const header = `[Script Info]
 Title: Cutawan captions
@@ -192,32 +255,31 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,${style.fontFamily},${fontSize},${primary},${primary},${outline},&H80000000,${style.bold ? -1 : 0},0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadow},5,${marginH},${marginH},0,1
-Style: Title,${style.fontFamily},${titleFontSize},${hookText},${hookText},${titleBox},${titleShadowColor},-1,0,0,0,100,100,0,0,3,${titleBoxPad},${titleShadow},8,${titleMarginH},${titleMarginH},${titleMarginV},1
+${title?.style ?? `Style: Title,${style.fontFamily},${assFontSize(opts.height * 0.044, opts.fontMetrics ?? null)},&H00FFFFFF,&H00FFFFFF,&H40000000,&H90000000,-1,0,0,0,100,100,0,0,3,6,2,8,0,0,0,1`}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `
 
   const lines: string[] = []
-  const clipDur = opts.clipEnd - opts.clipStart
+  if (title) lines.push(title.event)
 
-  if (opts.title && opts.title.trim().length > 0) {
-    const showFor = Math.min(4, clipDur)
-    lines.push(
-      `Dialogue: 1,${assTime(0)},${assTime(showFor)},Title,,0,0,0,,{\\fad(200,300)}${escapeAss(opts.title.trim())}`
-    )
-  }
-
-  const words = wordsInRange(transcript, opts.clipStart, opts.clipEnd)
-  const groups = groupWords(words, captionLayoutBudget(style, opts.width / opts.height))
-  // \q2 turns libass wrapping off for caption events only: the layout above
-  // decided their lines. The hook title keeps the script's smart wrapping
-  // (WrapStyle 0) because it carries no explicit breaks of its own.
-
+  // Same grouping, line layout and emphasis as the preview (captionGroupsFor).
+  const breaks = opts.breaks ?? []
+  // Translated-only captions replace the original ones (see translatedCaptions.ts).
+  const groups = opts.translation?.mode === 'translated' ? [] : captionGroupsFor(transcript, opts.clipStart, opts.clipEnd, captionLayoutBudget(style, opts.width / opts.height), {
+    breaks,
+    emphasis: opts.emphasis,
+    emoji: opts.emoji,
+    keywords: opts.keywords,
+    hook: opts.hook
+  })
+  // \q2 turns libass wrapping off for caption events: the layout above
+  // decided their lines.
   groups.forEach((group, gi) => {
     // The finished group holds briefly after its last word (never into the
-    // next group) so pauses do not leave an empty frame.
-    const groupEnd = groupDisplayEnd(groups, gi, opts.clipEnd)
+    // next group or across a seam) so pauses do not leave an empty frame.
+    const groupEnd = groupDisplayEnd(groups, gi, opts.clipEnd, breaks)
     for (let i = 0; i < group.words.length; i++) {
       const w = group.words[i]
       const start = Math.max(0, w.start - opts.clipStart)
@@ -231,10 +293,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const from = cuts[part], until = cuts[part + 1]
         const position = captionPositionAt(opts.positionRanges, opts.clipStart + (from + until) / 2, style.positionY)
         const anchor = `{\\an5\\q2\\pos(${captionX},${Math.round(position * opts.height)})}`
-        lines.push(`Dialogue: 0,${assTime(from)},${assTime(until)},Caption,,0,0,0,,${anchor}${renderGroupText(group, i, style)}`)
+        lines.push(`Dialogue: 0,${assTime(from)},${assTime(until)},Caption,,0,0,0,,${anchor}${renderGroupText(group, i, style, emojiFontSize)}`)
       }
     }
   })
+
+  if (opts.translation) {
+    lines.push(...buildTranslatedAssEvents(opts.translation, {
+      style, width: opts.width, height: opts.height, clipStart: opts.clipStart, positionRanges: opts.positionRanges,
+      fontSize: assFontSize, styleMetrics: opts.fontMetrics ?? null
+    }))
+  }
 
   return header + lines.join('\n') + '\n'
 }

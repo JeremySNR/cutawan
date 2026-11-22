@@ -537,3 +537,50 @@ export function extractJsonText(content: string): string {
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
   return fenced ? fenced[1].trim() : trimmed
 }
+
+/** Text-to-speech requests are short; a stuck one should fail, not hang a dub. */
+export const SPEECH_TIMEOUT_MS = 2 * 60_000
+
+export interface SpeechRequest {
+  model: string
+  voice: string
+  input: string
+  /** 0.25-4 on models that support it (tts-1); others ignore it. */
+  speed?: number
+  /** Delivery guidance for gpt-4o-mini-tts (pace, tone). */
+  instructions?: string
+}
+
+/**
+ * Synthesise speech through the route's OpenAI-compatible `/audio/speech`
+ * endpoint (OpenAI, a configured base URL, or OpenRouter, which mirrors it).
+ * Returns MP3 bytes. Not available through ChatGPT sign-in: that route has
+ * no paid API, and callers check `dubSupport` before getting here.
+ */
+export async function synthesizeSpeech(apiKey: string, req: SpeechRequest, signal?: AbortSignal): Promise<Buffer> {
+  if (usesSubscription()) throw new OpenAIError('AI voice dubbing is not available with ChatGPT sign-in.')
+  const body = JSON.stringify({
+    model: req.model,
+    voice: req.voice,
+    input: req.input,
+    response_format: 'mp3',
+    ...(req.speed !== undefined && req.speed !== 1 ? { speed: Math.min(4, Math.max(0.25, req.speed)) } : {}),
+    ...(req.instructions ? { instructions: req.instructions } : {})
+  })
+  return withRetries(
+    () => apiRequests.run(async () => {
+      assertKeyMatchesRoute(apiKey)
+      const res = await fetch(`${chatApiBase()}/audio/speech`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...providerHeaders() },
+        body,
+        signal: withTimeout(SPEECH_TIMEOUT_MS, signal)
+      })
+      await raiseForStatus(res, 'Speech synthesis')
+      const bytes = Buffer.from(await res.arrayBuffer())
+      if (bytes.length < 64) throw new OpenAIError('Speech synthesis returned no audio')
+      return bytes
+    }, signal),
+    { signal }
+  )
+}

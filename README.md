@@ -9,6 +9,7 @@
 <p align="center">
   Turn podcasts, webinars, streams and interviews into ready-to-post vertical clips for TikTok, Reels and YouTube Shorts.<br/>
   AI-picked moments, virality scores, animated captions, auto zoom and speaker-aware reframing.<br/>
+  Translate and dub clips with AI voices, or open them as a timeline in Premiere Pro, DaVinci Resolve or Final Cut Pro.<br/>
   A normal installer: no Docker, no watermark, no per-minute credits.
 </p>
 
@@ -53,6 +54,9 @@ Opus Clip is great, but it costs a subscription, runs in the cloud, and uploads 
 | Processing minutes       | Unlimited                                       | Capped per plan                   |
 | Watermark                | Your own logo, or none                          | Removed on paid tiers             |
 | Models                   | Your choice (OpenAI, or any OpenRouter model)  | Theirs                            |
+| Caption translation & AI dubbing | Included; you pay your provider per request | Paid tiers or add-on credits |
+| Finish in your own editor | Timeline export for Premiere Pro, DaVinci Resolve and Final Cut Pro | Paid tiers |
+| Batch processing         | Queue as many files and links as you like        | Limited by plan minutes           |
 | Extensible               | Fork it, script it, PR it                       | Closed                            |
 
 **Compared with other open-source clippers:** many are self-hosted web apps or Python scripts that need Docker or a Python environment, and often several API keys, before the first clip. Cutawan is a desktop installer with an in-app setup wizard, on-device active speaker detection, and a captions-only mode that needs no AI connection. The website keeps a [sourced comparison of open-source Opus Clip alternatives](https://cutawan.xyz/open-source-ai-video-clippers/).
@@ -92,15 +96,20 @@ On the default API route, a typical estimate is **~$0.36/hour of video** for Whi
 - **Find visual moments (beta).** Opt in to sampled source-wide discovery before transcript selection, including demonstrations and visible events without speech. The app shows sampling gaps and failed coverage. [How it works and its limits](docs/source-discovery.md).
 - **Viral moment detection backed by research.** An LLM picks self-contained hook, build, payoff micro-stories (not clips that trail off mid-setup). You can steer it with your own prompt if you want, like "find the funniest exchanges". A second AI pass reviews every clip ending and extends it to the beat that actually completes the thought.
 - **Join separate moments (beta).** Opt in to let a clip put two or three moments together, such as a question and its answer with the tangent between them removed. Every join is reviewed for whether it plays seamlessly and keeps what was said, joined clips are labelled, and the join can be moved or undone in the editor. [How it works and its limits](docs/joined-moments.md).
+- **Hears who is speaking and how the room reacts.** On-device speaker diarization finds where one voice stops and another starts, so podcast and interview clips start on the question and don't end mid-answer. Laughter and applause are detected from the audio, so the AI knows which lines landed. [How speaker detection works](docs/speaker-diarization.md).
+- **Varied clips that stay on topic.** Each clip is labelled a story, insight, opinion, funny moment, emotional moment or explainer, and the list mixes them. On-device topic detection keeps a clip from drifting into the next subject, and guidance tuned to podcasts, interviews, webinars, lectures and streams steers the picks.
 - **Editorial selection and ranking.** Review retained speech, nearby context and sampled frames against common hook, clarity, value, payoff and audience-fit criteria. Incomplete stories need evidence; uncertainty stays visible, repeated ideas move down the list, and scores are provisional editorial assessments. [How ranking and its comparison baseline work](docs/editorial-ranking.md).
 
 **Making them good**
 
 - **Presenter + content layouts.** Separate a webcam inset from a screen recording and compose both into 9:16, with content-first, stacked and content-only choices. Set source regions manually offline or use sampled AI layout review. Uncertain layouts keep the full scene and ask for review; moving insets still need careful checking. [Scope and remaining work](docs/adaptive-clipping-status.md).
 - **Auto zoom.** Scene-aware punch-ins on the speaker's most energetic lines, jump zooms that cover cuts, and slow creep on static stretches. The kind of thing top short-form editors do to keep people watching.
-- **Tighten cuts.** Pauses and filler words ("um", "uh") get removed automatically. Captions, B-roll, zoom and the face track all remap to the shorter timeline.
+- **Tighten cuts.** Pauses, filler words ("um", "uh") and retakes (a sentence restarted or said twice) get removed automatically; click any removal on the timeline to put it back. Captions, B-roll, zoom and the face track all remap to the shorter timeline.
 - **Speaker-aware auto-reframe.** On-device audio-visual active speaker detection (UltraFace face tracking + the LR-ASD model via ONNX Runtime, no cloud) checks every face's lip movement against the actual soundtrack, so the crop stays on the person talking — not whoever moves or gestures. The 9:16 crop cuts between speakers like a camera switch.
-- **12 caption styles plus your own fonts.** Karaoke-style word highlighting burned in with libass. Upload any TTF/OTF and previews match exports exactly.
+- **17 caption styles plus your own fonts.** Twelve karaoke-style styles burned in with libass, and five animated ones (Pop, Glide, Prism, Sweep and Spark) where words spring in, a highlight glides from word to word, or colour fills each word as it is said. Upload any TTF/OTF and previews match exports exactly.
+- **Hooks that hold.** Open on a cold open (the clip's strongest line, played first) and a hook title as a card, bold text or a banner. Key words get the caption's highlight colour, optionally with an emoji, and captions move out of the way of faces and text already in the video.
+- **Sound and music.** A whoosh on cuts, a pop on the title, and background music from your own folder of tracks, ducked under the voice.
+- **Caption translation and AI voice dubbing.** Translate a clip's captions into another language, review and edit every line, and keep names and catchphrases unchanged. Then dub the translation with an AI voice that fits each line into its sentence's slot over the ducked original. Show the original captions, the translation or both.
 - **Your branding.** Overlay your logo or watermark (corner, size, opacity) on the preview and every export.
 - **AI B-roll.** Say "Yoda" and a picture of Yoda pops over the video at that word. Uses Wikipedia and Openverse images, no extra API keys.
 - **A real editor.** Filmstrip trim with waveform and live playhead, click-to-seek transcript that doubles as a trim tool, aspect ratios (9:16 / 1:1 / 16:9), and a live preview that matches the export.
@@ -108,6 +117,10 @@ On the default API route, a typical estimate is **~$0.36/hour of video** for Whi
 **Shipping them**
 
 - **Export** H.264/AAC MP4s with burned-in captions. Loudness-normalised to -14 LUFS, gentle audio tail fade, three quality tiers, NVIDIA NVENC GPU encoding with automatic CPU fallback. Optionally encode once to fit under a megabyte cap (Discord, email, WhatsApp).
+- **Open clips in your own editor.** Export any clip as a timeline for Premiere Pro, DaVinci Resolve (XML) or Final Cut Pro (FCPXML), with every cut in place and an SRT of the captions.
+- **Every export checked.** After each render Cutawan measures the file for black or silent starts and ends, freezes, loudness, peaks and mid-word cuts, fixes what is safe to fix, and tells you about the rest.
+- **Batch queue.** Paste several links or add several files and walk away: they are imported and analysed one after another, and the queue survives a restart.
+- **Learns what you keep (optional).** Personalised ranking leans scores towards the clips you actually export, kept on your computer only.
 - **AI post captions.** One click writes a scroll-stopping TikTok/Reels/Shorts caption (hook-first line, one engagement driver, niche hashtags). Copy it and jump straight to TikTok Studio upload.
 - **Update notifications.** Windows/Linux packages download and install updates in the app. Unsigned Mac builds download and verify the installer in the app, then guide you through replacing it in Applications. Source checkouts update with one click (pull, rebuild, relaunch).
 
@@ -193,7 +206,7 @@ npm run typecheck
 npm run lint
 ```
 
-Integration test scripts live in `scripts/` (`test-pipeline`, `test-e2e`, `test-quality`, `test-wholevideo`, `test-encoders`, `test-resilience`, `test-broll`, `test-youtube`, `test-asd`, `smoke-test.sh`). See each file's header for what it covers. The e2e ones need `OPENAI_API_KEY`.
+Integration test scripts live in `scripts/` (`test-pipeline`, `test-e2e`, `test-quality`, `test-wholevideo`, `test-encoders`, `test-resilience`, `test-broll`, `test-youtube`, `test-asd`, `smoke-test.sh`, `test-animated-captions.sh`). See each file's header for what it covers. The e2e ones need `OPENAI_API_KEY`. `test-animated-captions.sh` exports a clip with every animated caption style through the real hidden Chromium caption window under Xvfb (`CUTAWAN_CAPTION_BENCH=1` adds a 60 s timing against libass).
 
 To measure clip quality on your own projects, `scripts/eval-clips.ts` reads every saved project and reports how many clips open mid-sentence, cut a sentence off, or trail into dead air, plus the length spread. Add `--rerun` (needs `OPENAI_API_KEY`, a few cents per project, no transcription cost) to re-run clip detection on the saved transcripts with the current prompts and compare, which is how to check a prompt change actually helps:
 
@@ -250,8 +263,20 @@ does not mean paying to transcribe it again.
 **Does it work in languages other than English?**
 Transcription does. Set the language in Settings (it defaults to English, which
 is more reliable than auto-detect, since auto occasionally mislabels English as
-something else). Captions burn in whatever Whisper returns. Translating captions
-into another language is on the roadmap, not built yet.
+something else). Captions burn in whatever Whisper returns.
+
+**Can it translate captions or dub clips into another language?**
+Yes. In the editor, translate a clip's captions with one AI request, check and
+edit every line, and show the original, the translation or both. On API and
+OpenRouter connections you can then dub the translation with an AI voice: each
+line is fitted to the time the original sentence took, and the original audio
+is turned down underneath. You pay your provider for the translation request and
+the characters voiced; the cost is shown before you dub.
+
+**Can I finish clips in Premiere Pro, DaVinci Resolve or Final Cut Pro?**
+Yes. Export a clip as an edit timeline (XML for Premiere Pro and Resolve, FCPXML
+for Final Cut Pro) that points at your source video with every cut in place,
+plus an SRT of the captions.
 
 **Can it post to TikTok or YouTube for me?**
 Not automatically. It writes the post caption and hands you the file, then you
@@ -291,7 +316,6 @@ faster-whisper directly, with an in-app installer and no server.
 
 Each of these is an open issue, so the discussion and the detail live there. Contributions very welcome.
 
-- [Multi-language caption translation](https://github.com/JeremySNR/cutawan/issues/49)
 - [Manual zoom keyframes on the timeline](https://github.com/JeremySNR/cutawan/issues/50)
 - Easier fully bundled on-device Whisper, without requiring a separate Python installation
 - Direct publishing and scheduling to socials (needs an audited TikTok/YouTube app)

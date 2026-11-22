@@ -47,6 +47,34 @@ export interface Transcript {
    * clip boundaries cut only in silence when present; older projects lack it.
    */
   speech?: SpeechRegion[]
+  /**
+   * Who speaks when, from on-device speaker diarization of the whole source.
+   * Speaker ids are small integers numbered in order of first appearance
+   * (0 is whoever speaks first). Absent when diarization did not run or found
+   * a single voice only; older projects lack it.
+   */
+  speakerTurns?: SpeakerTurn[]
+  /**
+   * Moments of non-speech audio excitement across the whole source
+   * (laughter, applause, a crowd, an impact, a music hit), in time order.
+   * `strength` is 0..1, relative to this source. Absent on older projects.
+   */
+  reactions?: AudioReaction[]
+}
+
+/** One stretch of one speaker's speech, in source seconds. */
+export interface SpeakerTurn {
+  start: number
+  end: number
+  speaker: number
+}
+
+/** A stretch of non-speech audio that stands out from the rest of the source. */
+export interface AudioReaction {
+  start: number
+  end: number
+  strength: number
+  kind?: 'laughter' | 'applause' | 'impact' | 'music' | 'other'
 }
 
 export type AspectRatio = '9:16' | '1:1' | '16:9' | 'original'
@@ -75,6 +103,12 @@ export type ProjectMode = 'clips' | 'whole-video'
  * highlight defaults, face tracking and 9:16 layout (crop vs letterbox).
  */
 export type VideoType = 'auto' | 'talking-head' | 'podcast' | 'webinar' | 'product-demo'
+
+/**
+ * The kinds of moment clip selection tells apart. A small fixed set, so the
+ * list can be varied by kind and the card can label it in a word or two.
+ */
+export type ClipKind = 'story' | 'insight' | 'opinion' | 'funny' | 'emotional' | 'explainer' | 'other'
 
 /** Auto = follow the AI face track; manual = fixed focusX slider. */
 export type FramingMode = 'auto' | 'manual'
@@ -142,6 +176,29 @@ export interface ClipEditState {
   /** Font family overriding the style's font (a custom uploaded font); null/absent = style default. */
   captionFontFamily?: string | null
   showTitle: boolean
+  /**
+   * Which captions burn in once the clip has an accepted translation
+   * (`Clip.translation`): the original transcript, the translation, or both
+   * (translation under the original, smaller). Absent means original.
+   */
+  captionLanguage?: CaptionLanguageMode
+  /** Look of the hook title card; absent = 'card'. */
+  titleStyle?: TitleStyleId
+  /** Mark the clip's key words in the captions (bigger, accent colour). Absent = on. */
+  emphasis?: boolean
+  /** Draw a small emoji after some emphasised words. Absent = off. */
+  emoji?: boolean
+  /**
+   * Replay the clip's strongest short line at the very start, then play the
+   * clip from its beginning (see shared/coldOpen.ts). Absent = off.
+   */
+  coldOpen?: boolean
+  /** Synthesised sound effects at joins, the cold-open seam and the title. Absent = off. */
+  soundEffects?: boolean
+  /** Background music from the music folder in Settings, ducked under speech. Absent = off. */
+  music?: boolean
+  /** File name of the chosen track inside the music folder; absent = picked automatically. */
+  musicTrack?: string | null
   /** Trim overrides (absolute seconds in the source video). */
   start: number
   end: number
@@ -195,6 +252,13 @@ export interface Clip {
    * records what was proposed and why, so the clip can say what it is.
    */
   stitch?: { segments: TimeRange[]; reason: string }
+  /**
+   * What sort of moment the AI judged this to be (a story, a tip, a hot
+   * take…), used to vary the top of the list and shown on the clip card.
+   * Absent on older clips, visual-only suggestions, and when the model did
+   * not say.
+   */
+  kind?: ClipKind
   /** AI suggested boundaries (absolute seconds in the source video). */
   suggestedStart: number
   suggestedEnd: number
@@ -273,7 +337,50 @@ export interface Clip {
   contentType?: ClipContentType | null
   /** AI-suggested image inserts timed to spoken keywords. */
   broll: BrollItem[]
+  /** AI caption translation, reviewed in the editor before use. */
+  translation?: ClipTranslation
+  /** AI voice dub of the accepted translation. */
+  dub?: ClipDub
+  /**
+   * Key words to emphasise in the captions, chosen by the visual review.
+   * Absent means the deterministic heuristic picks them (shared/captionEmphasis.ts).
+   */
+  emphasis?: CaptionEmphasis
+  /** Where faces and burned-in text sit in the source, so captions can stay clear. */
+  captionSafety?: CaptionSafety
   edit: ClipEditState
+}
+
+/** Hook title looks, shared by the preview and the burned-in ASS. */
+export type TitleStyleId = 'card' | 'bold' | 'banner'
+
+export interface CaptionEmphasisWord {
+  /** One spoken word, as transcribed (matched case- and punctuation-insensitively). */
+  text: string
+  /** Optional emoji from the bundled set (CAPTION_EMOJI) drawn after the word. */
+  emoji?: string
+}
+
+export interface CaptionEmphasis {
+  source: 'ai'
+  words: CaptionEmphasisWord[]
+}
+
+/** A face's vertical extent over a stretch of source time (normalised source y). */
+export interface FaceBand { start: number; end: number; top: number; bottom: number }
+
+export interface CaptionSafety {
+  version: number
+  /** The source span the measurement covers. */
+  start: number
+  end: number
+  /** The tracked speaker's face over time; empty when no faces were tracked. */
+  faces: FaceBand[]
+  /**
+   * A band of persistent burned-in text (subtitles, a ticker) in the lower
+   * part of the source frame, normalised source y; null when none was seen.
+   */
+  textBand: { top: number; bottom: number } | null
 }
 
 /** Normalized source rectangle; fit it intact instead of discarding its edges. */
@@ -322,11 +429,27 @@ export interface Project {
   editorialRanking?: EditorialRankingReport
   /** Flow that last ran on this project; absent on clip-finding projects. */
   mode?: ProjectMode
+  /** Reuse licence reported for a URL import; absent for local files. */
+  importLicence?: ImportLicence
+  /**
+   * Set when the current clip list was re-ranked from the user's own
+   * export and edit history (see shared/personalisation.ts).
+   */
+  personalised?: { generationId: string; positives: number }
   /**
    * True when the source video no longer exists on disk (moved/deleted).
    * Transient — recomputed on load, never persisted.
    */
   sourceMissing?: boolean
+}
+
+/** What a URL import's source said about reuse. */
+export interface ImportLicence {
+  url: string
+  /** The licence as the site reports it; null when it reports none. */
+  license: string | null
+  /** True for Creative Commons and public-domain licences. */
+  reusable: boolean
 }
 
 export interface ProjectSummary {
@@ -407,6 +530,70 @@ export interface ExportOptions {
   outputDir: string
 }
 
+/** Editing-timeline formats offered by "Export edit for…". */
+export type NleFormat = 'fcpxml' | 'xmeml'
+
+export interface NleExportOptions {
+  clipId: string
+  format: NleFormat
+  /** Target directory; file names are derived from the clip title. */
+  outputDir: string
+}
+
+export interface NleExportResult {
+  clipId: string
+  format: NleFormat
+  /** The timeline file (.fcpxml or .xml). */
+  outputPath: string
+  /** Caption sidecar, when the project has a transcript with words in the clip. */
+  srtPath: string | null
+  /** Clips on the timeline (kept segments after pause removal and cuts). */
+  segments: number
+}
+
+/** Local learning from which clips the user keeps (see shared/personalisation.ts). */
+export interface PersonalisationSummary {
+  enabled: boolean
+  /** Distinct clips exported or edited. */
+  positives: number
+  /** Clips recorded in all. */
+  recorded: number
+  /** Positives needed before re-ranking starts. */
+  minPositives: number
+  /** True when new runs are being re-ranked. */
+  active: boolean
+}
+
+export type BatchItemSource = { kind: 'file'; path: string } | { kind: 'url'; url: string }
+
+export type BatchItemStatus = 'queued' | 'importing' | 'analysing' | 'done' | 'failed' | 'cancelled'
+
+export interface BatchItem {
+  id: string
+  source: BatchItemSource
+  /** File name or URL, until the import names the project. */
+  label: string
+  /** Settings snapshot taken when the item was added. */
+  options: AnalyzeOptions
+  status: BatchItemStatus
+  /** 0..1 within this item, or -1 when indeterminate. */
+  progress: number
+  message: string
+  error?: string
+  /** Set once the import has created the project. */
+  projectId?: string
+  clipCount?: number
+  /** Reuse licence of a URL import, once known. */
+  licence?: ImportLicence
+  addedAt: number
+}
+
+export interface BatchQueueState {
+  items: BatchItem[]
+  /** True while the queue works through its items. */
+  running: boolean
+}
+
 export interface ExportProgress {
   clipId: string
   progress: number
@@ -437,6 +624,36 @@ export interface ExportResult {
    * file stays under the cap; compare `bytes` to `sizeTargetBytes`.
    */
   overBudget?: boolean
+  /** What the check after the render found and repaired (main/pipeline/exportCheck.ts). */
+  check?: ExportCheckReport
+  /**
+   * Set when the clip's animated caption style could not be drawn and the
+   * file has its libass equivalent instead: one sentence saying so and why.
+   */
+  captionNotice?: string
+}
+
+/** One thing the post-export check noticed. Times are seconds into the exported file. */
+export interface ExportCheckFinding {
+  kind: 'black' | 'freeze' | 'silence-start' | 'silence-end' | 'loudness' | 'true-peak' | 'mid-word'
+  /** One plain sentence for the person exporting. */
+  message: string
+  at?: number
+  duration?: number
+  /** Fixed in the saved file; reported so the change is not a surprise. */
+  repaired?: boolean
+}
+
+export interface ExportCheckReport {
+  /** 'skipped' when the check could not run (it never fails an export). */
+  status: 'checked' | 'skipped'
+  findings: ExportCheckFinding[]
+  /** Wall-clock seconds the check and any repair added to the export. */
+  seconds: number
+  /** Measured on the saved file. */
+  loudness?: { integratedLufs: number; truePeakDb: number }
+  /** Why the check was skipped. */
+  note?: string
 }
 
 export type EncoderPreference = 'auto' | 'cpu' | 'gpu'
@@ -623,6 +840,8 @@ export interface AppSettings {
   importCookiesBrowser: BrowserCookieSource
   /** True when a Netscape cookies.txt file is stored for URL imports. */
   hasImportCookiesFile: boolean
+  /** Folder background music is picked from; null when none was chosen. */
+  musicFolder: string | null
 }
 
 export interface SettingsUpdate {
@@ -646,6 +865,8 @@ export interface SettingsUpdate {
   brandVoice?: Partial<BrandVoiceSettings>
   importCookiesBrowser?: BrowserCookieSource
   clearImportCookiesFile?: boolean
+  /** Background music folder; null clears it. */
+  musicFolder?: string | null
 }
 
 export interface PipelineError {
@@ -657,6 +878,8 @@ export interface ImportProgress {
   /** 0..1, or -1 when indeterminate. */
   progress: number
   message: string
+  /** A URL import's reuse licence, sent once the metadata is read. */
+  licence?: ImportLicence
 }
 
 /** Editor timeline data for a window of the source video. */
@@ -665,4 +888,73 @@ export interface TimelineData {
   frames: string[]
   /** Normalised 0..1 RMS per bucket across the window (empty when no audio). */
   waveform: number[]
+}
+
+/** See `ClipEditState.captionLanguage`. */
+export type CaptionLanguageMode = 'original' | 'translated' | 'both'
+
+/**
+ * One translated sentence. `start`/`end` span the source sentence's played
+ * words (absolute source seconds): the translation plays in that slot.
+ */
+export interface TranslationLine {
+  start: number
+  end: number
+  /** The original sentence as it was sent (only the words that played). */
+  source: string
+  /** The translation (or the original, when the model skipped the line). */
+  text: string
+  /** The model returned nothing usable for this line; `text` is the original. */
+  untranslated?: boolean
+  /** The user changed `text` in the review panel. */
+  edited?: boolean
+  /** Protected terms or numbers from the source that `text` lost. */
+  warnings?: string[]
+}
+
+export interface ClipTranslation {
+  version: 1
+  /** Target language as the user chose or typed it, e.g. "Spanish". */
+  language: string
+  /** BCP-47 code when the language came from the list (e.g. "es"). */
+  languageCode?: string
+  /** Terms the creator asked to keep unchanged. */
+  doNotTranslate?: string[]
+  lines: TranslationLine[]
+  /** True once any line was edited by hand. */
+  edited: boolean
+  /** Reviewed and accepted in the editor; until then it is not displayed. */
+  accepted: boolean
+  createdAt: number
+}
+
+/** How a synthesised line was made to fit its slot. */
+export type DubFit = 'natural' | 'faster' | 'stretched' | 'truncated'
+
+export interface DubLine {
+  /** Source slot of the translation line it voices (absolute seconds). */
+  start: number
+  end: number
+  /** The translation line it voices; a later edit to the line makes it stale. */
+  text: string
+  /** Shorter wording actually voiced, when the line was too long for its slot (captions keep `text`). */
+  spoken?: string
+  /** Cached synthesised audio in the project folder. */
+  audioPath: string
+  /** Length of the synthesised audio at normal tempo, in seconds. */
+  audioSec: number
+  /** Tempo applied on playback and export (1 = none, at most DUB_MAX_TEMPO). */
+  tempo: number
+  fit: DubFit
+}
+
+export interface ClipDub {
+  version: 1
+  provider: 'openai' | 'openrouter'
+  model: string
+  voice: string
+  /** Mix the dub into the preview and the export. */
+  enabled: boolean
+  lines: DubLine[]
+  createdAt: number
 }

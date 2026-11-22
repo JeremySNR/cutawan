@@ -3,6 +3,7 @@ import type { Clip, Transcript, TranscriptSegment } from '@shared/types'
 import {
   activeGapRanges,
   audioExtent,
+  blurFrame,
   frameDifference,
   speechLevel,
   measurableGaps,
@@ -99,9 +100,23 @@ describe('which gaps are measured', () => {
 describe('picture motion', () => {
   it('ignores compression noise below the core', () => {
     const a = new Uint8Array(64 * 36).fill(100)
-    const b = a.map((v, i) => v + (i % 2 ? 4 : -4))
+    const b = a.map((v, i) => v + (i % 2 ? 3 : -3))
     expect(frameDifference(a, b)).toBe(0)
-    expect(frameDifference(a, a.map(v => v + 14))).toBe(10)
+    expect(frameDifference(a, a.map(v => v + 14))).toBe(11)
+  })
+
+  it('blurs away pixel-level shimmer but keeps a moving shape', () => {
+    const blur = (f: Uint8Array): Float32Array => blurFrame(f, 64, 36)
+    // A checkerboard flicker of ±8 levels: what compression noise does on a still.
+    const still = new Uint8Array(64 * 36).fill(100)
+    const shimmer = still.map((v, i) => v + ((i + Math.floor(i / 64)) % 2 ? 8 : -8))
+    expect(frameDifference(still, shimmer)).toBeGreaterThan(4)
+    expect(frameDifference(blur(still), blur(shimmer))).toBe(0)
+    // A bright 8x8 block moving 8 px still reads as motion.
+    const block = (x0: number): Uint8Array => still.map((v, i) => (i % 64 >= x0 && i % 64 < x0 + 8 && Math.floor(i / 64) >= 10 && Math.floor(i / 64) < 18 ? 200 : v))
+    expect(frameDifference(blur(block(10)), blur(block(18)))).toBeGreaterThan(2)
+    // Flat frames are unchanged by it, edges included.
+    expect([...blur(still)].every(v => v === 100)).toBe(true)
   })
 
   it('needs sustained motion: a hard cut is one spike', () => {
@@ -118,7 +133,7 @@ describe('picture motion', () => {
     expect(motionExtent(moving, gap, 0)).toEqual(gap)
     // A handheld camera that moves this much all the time is not "activity".
     expect(motionExtent(moving, gap, 1)).toBeNull()
-    expect(motionExtent(steps(3, 6, () => 0.9), gap, 0)).toBeNull()
+    expect(motionExtent(steps(3, 6, () => 0.8), gap, 0)).toBeNull()
   })
 })
 

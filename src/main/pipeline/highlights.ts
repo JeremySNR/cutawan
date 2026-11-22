@@ -25,6 +25,23 @@ import {
 } from '@shared/sentences'
 import { chatJSON } from './openai'
 import { buildVideoOutline, type OutlinePairing } from './outline'
+import { CLIP_KINDS, diversifyClipOrder, parseClipKind } from '@shared/clipVariety'
+import {
+  NO_MARKS,
+  MIN_REACTION_STRENGTH,
+  REACTION_LAG_SEC,
+  TOPIC_CHANGE_LINE,
+  edgeSpeaker,
+  hasMarks,
+  reactionSuffix,
+  speakerPrefix,
+  topicChangeBetween,
+  transcriptMarks,
+  type LineMarks
+} from './lineMarks'
+import { detectTopics, type SentenceEmbedder, type TopicBoundaries } from './topics'
+import { defaultSentenceEmbedder } from './sentenceEmbedder'
+import { inferVideoType, videoTypeGuidance } from './videoTypePrompt'
 
 /**
  * A clip's span as the model gave it: the numbers of the first and last
@@ -45,6 +62,8 @@ interface RawHighlight extends RawSpan {
   segments?: RawSpan[]
   /** Why the parts belong together; empty for a single part. */
   join_reason?: string
+  /** One of CLIP_KINDS; anything else (or nothing, from a non-strict provider) is no kind. */
+  kind?: unknown
   title: string
   hook: string
   summary: string
@@ -71,6 +90,11 @@ const CLIP_FIELDS = {
     description: 'Scroll-stopping first line to overlay during the first seconds'
   },
   summary: { type: 'string', description: 'One sentence describing the moment' },
+  kind: {
+    type: 'string',
+    enum: CLIP_KINDS,
+    description: 'What sort of moment this is: story (an anecdote told through), insight (a tip, lesson or insight the viewer can use), opinion (a hot take or strong stance), funny, emotional, explainer (how or why something works), or other'
+  },
   payoff: {
     type: 'string',
     description:
@@ -275,11 +299,19 @@ function formatTimestamp(sec: number): string {
  * answers with line numbers and the code looks the times up: a model asked to
  * copy a time back drifts by a word or a line, while a number either names a
  * line it was shown or is plainly wrong. The times stay on the line because
- * the model needs them to judge how long a clip runs. Exported for tests.
+ * the model needs them to judge how long a clip runs.
+ *
+ * With `marks`, a line also says who speaks it, "(Speaker B)" after the times
+ * (only when the video has more than one speaker), and carries a
+ * "[laughter after]" style tag when the audience reacts right after it; and a
+ * separator line stands between two lines where the topic changes. A line
+ * still starts "#n [start - end] ", which providers and tests rely on.
+ * Exported for tests.
  */
-export function formatTranscriptForModel(sentences: Sentence[], opts: { durations?: boolean } = {}): string {
+export function formatTranscriptForModel(sentences: Sentence[], opts: { durations?: boolean; marks?: LineMarks } = {}): string {
+  const marks = opts.marks ?? NO_MARKS
   return sentences
-    .map((s) => {
+    .map((s, i) => {
       const delivery =
         s.energy === undefined
           ? ''
@@ -291,7 +323,9 @@ export function formatTranscriptForModel(sentences: Sentence[], opts: { duration
       // With durations, a model can add up a clip's length instead of
       // subtracting timestamps, which it does badly on long videos.
       const length = opts.durations ? `, ${(s.end - s.start).toFixed(1)}s long` : ''
-      return `#${s.index} [${formatTimestamp(s.start)} - ${formatTimestamp(s.end)}${length}] ${s.text}${delivery}`
+      const line = `#${s.index} [${formatTimestamp(s.start)} - ${formatTimestamp(s.end)}${length}] ${speakerPrefix(marks, s.index)}${s.text}${delivery}${reactionSuffix(marks, s.index)}`
+      // Not above the first line shown: a block opening on a new topic has nothing before it to set it apart from.
+      return i > 0 && marks.topicStarts.has(s.index) ? `${TOPIC_CHANGE_LINE}\n${line}` : line
     })
     .join('\n')
 }
@@ -369,6 +403,29 @@ const STITCH_PROMPT = `Joining moments:
 - Never change what a speaker meant. Do not join a question to an answer that was given to a different question. Do not skip a qualification, a condition, a "but", a correction or a negation that changes the claim. Do not join lines from different speakers into what sounds like one statement. If you are not sure the joined clip is faithful to what was said, return the continuous moment instead.
 - Every segment is a "start_line" and an "end_line" (both included), and holds at least one complete sentence. Segments are listed in video order and do not overlap. The clip's length is the total of its segments, each running from the start time of its first line to the end time of its last.
 - State in join_reason what was skipped and why the clip is better without it.`
+
+/**
+ * What the selection prompt says about the marks on the lines, only for the
+ * marks this transcript has, so a transcript without any reads the prompt it
+ * always did. Speakers show who asks and who answers; a reaction shows where
+ * a line landed, and that the payoff comes before it; a topic change shows
+ * where a clip would start depending on a different subject. Exported for
+ * tests.
+ */
+export function markingsGuidance(marks: LineMarks): string {
+  const has = hasMarks(marks)
+  const rules: string[] = []
+  if (has.speakers) {
+    rules.push('- Lines carry their speaker, measured from the voices: (Speaker A), (Speaker B) and so on, and (Speaker A, then B) for a line where the speaker changes partway. Use them to see who asks and who answers. A clip built on an answer needs the question that prompted it, or must make sense without it; a clip should not end on one speaker\'s question with the answer left out. Never present lines from two speakers as one person\'s statement, and never join one speaker\'s question to an answer that was given to someone else\'s.')
+  }
+  if (has.reactions) {
+    rules.push('- A [laughter after], [applause after] or [reaction after] tag, measured from the audio, means the audience reacted right after that line: evidence that it landed, so weigh it in the emotion score. The reaction comes AFTER the payoff. A clip that uses it starts at the setup, includes the tagged line, and ends on it or a line or two after (the clip keeps a beat of the reaction itself). Never open a clip on the line right after a reaction: the viewer would hear the end of a laugh at a joke they missed.')
+  }
+  if (has.topics) {
+    rules.push(`- A line reading "${TOPIC_CHANGE_LINE}" between two numbered lines marks where the subject changes, measured from the words, so it is approximate. A clip should normally stay within one topic: do not open a clip just before a topic change or run it past one, unless the lines after it are plainly the same thought continuing.`)
+  }
+  return rules.length > 0 ? `Marks on the transcript lines:\n${rules.join('\n')}` : ''
+}
 
 /**
  * How many clips to ask the LLM for: roughly one per minute of source video.
@@ -461,6 +518,26 @@ function withNormalizedEnd(clip: Clip, transcript: Transcript, videoDurationSec:
 const REFINE_SYSTEM_PROMPT = `You quality-check the ENDINGS of short vertical clips cut from a longer video. A good clip has the shape of a complete micro-video — hook, build, and an ending that lands. What "lands" depends on the material: a story lands on its resolution or emotional beat, comedy on the punchline, an argument on its sharpest formulation, a reveal on the answer, practical content on the takeaway, and a provocative clip can land on a pointed question that throws back to the hook. An ending fails when the clip stops on setup, scene-setting context, the middle of a list, or a plain observation that promises more (e.g. ending on "People were experimenting with ChatGPT for the first time" — that sentence exists to set up whatever comes next).
 
 For each clip you receive its transcript and the sentences that follow it in the source video, each tagged with its line number and the time it ends. Judge the current ending strictly. Punctuation is not proof that a thought is complete. Prefer trimming to an existing payoff over extending into a new topic. A host's next interview question, thanks, or conversational handoff is NOT a closing payoff: end before it unless its complete answer belongs to this same story and fits the limit. A rhetorical question addressed to the audience can work, but do not confuse it with a question addressed to another participant. If a fragment follows a complete ending, trim the fragment; do not automatically extend it. Never append a new scene merely to finish its sentence. Only use line numbers of tagged lines from that clip's own block.`
+
+/**
+ * Added to the ending review's instructions for the marks its lines carry.
+ * A reaction tag tells it where a line landed; a speaker change in the
+ * continuation is usually the next question; a topic change is where the
+ * ending must stop. Exported for tests.
+ */
+export function endingMarksGuidance(marks: LineMarks): string {
+  const has = hasMarks(marks)
+  const rules: string[] = []
+  if (has.speakers) rules.push('Lines carry their speaker, measured from the voices. When the continuation switches to another speaker, it is usually a new question or a reaction to the answer: end before it unless that speaker completes this same thought.')
+  if (has.reactions) rules.push('A [laughter after], [applause after] or [reaction after] tag means the audience reacted right after that line, measured from the audio: that line landed. Ending on it is usually right, and the clip keeps a beat of the reaction automatically; do not run on past it into the next thought.')
+  if (has.topics) rules.push(`A "${TOPIC_CHANGE_LINE}" line marks where the subject changes (approximate). Never move an ending past it.`)
+  return rules.join(' ')
+}
+
+/** One line as a review shows it: number, a time, speaker, text and reaction tag. */
+function reviewLine(s: Sentence, marks: LineMarks, time: string): string {
+  return `  #${s.index} [${time}] ${speakerPrefix(marks, s.index)}${s.text}${reactionSuffix(marks, s.index)}`
+}
 
 interface RefinedEnding {
   index: number
@@ -573,6 +650,7 @@ async function refineEndingBatch(
   clips: Clip[],
   videoDurationSec: number,
   maxDuration: number,
+  marks: LineMarks,
   signal?: AbortSignal
 ): Promise<Clip[]> {
   if (clips.length === 0) return clips
@@ -601,11 +679,14 @@ async function refineEndingBatch(
       `Clip ${i} — "${clip.title}" (currently ends ${last ? `on line #${last.index} ` : ''}at ${clip.suggestedEnd.toFixed(1)}s):`,
       `  Latest permitted end including tail: ${latestEnd.toFixed(1)}s. Preserve a complete thought within this limit.`,
       head ? `  …${head.slice(-500)}` : '',
-      ...tail.map((s) => `  #${s.index} [ends ${s.end.toFixed(1)}s] ${s.text}`),
+      ...tail.map((s) => reviewLine(s, marks, `ends ${s.end.toFixed(1)}s`)),
       continuation.length > 0
         ? '  Continues after the current end:'
         : '  (no continuation fits the video and duration limits)',
-      ...continuation.map((s) => `  #${s.index} [ends ${s.end.toFixed(1)}s] ${s.text}`)
+      ...continuation.flatMap((s) => [
+        ...(marks.topicStarts.has(s.index) ? [`  ${TOPIC_CHANGE_LINE}`] : []),
+        reviewLine(s, marks, `ends ${s.end.toFixed(1)}s`)
+      ])
     ]
       .filter(Boolean)
       .join('\n')
@@ -616,7 +697,7 @@ async function refineEndingBatch(
       apiKey,
       model,
       [
-        { role: 'system', content: REFINE_SYSTEM_PROMPT },
+        { role: 'system', content: [REFINE_SYSTEM_PROMPT, endingMarksGuidance(marks)].filter(Boolean).join('\n\n') },
         {
           role: 'user',
           content: `Judge the ending of each clip below. Return one entry per clip, in order.\n\n${blocks.join('\n\n')}`
@@ -839,10 +920,11 @@ function refineClipEndings(
   clips: Clip[],
   videoDurationSec: number,
   maxDuration: number,
+  marks: LineMarks,
   signal?: AbortSignal
 ): Promise<Clip[]> {
   return reviewInBatches(clips, (batch) =>
-    refineEndingBatch(apiKey, model, transcript, batch, videoDurationSec, maxDuration, signal))
+    refineEndingBatch(apiKey, model, transcript, batch, videoDurationSec, maxDuration, marks, signal))
 }
 
 function refineClipStarts(
@@ -862,6 +944,19 @@ seamless — Would a viewer who hears only the lines that play notice nothing mi
 faithful — Does the joined clip mean what the speakers meant? It fails when the skipped lines hold a qualification, condition, correction, "but" or negation that changes the claim; when a question is joined to an answer that was given to a different question; when lines from different speakers are made to sound like one statement; or when the clip implies a cause, a sequence or an agreement that the full conversation does not support.
 
 Judge from the text you are given. If you cannot tell whether a join is faithful, it is not. Skipping a tangent, a repetition, an interruption or an example is fine when the lines either side still say what they said.`
+
+/**
+ * Added to the join review's instructions when its input names speakers or
+ * topic changes, measured locally: concrete facts about each join that the
+ * text alone leaves the model to guess. Exported for tests.
+ */
+export function joinMarksGuidance(marks: LineMarks): string {
+  const has = hasMarks(marks)
+  const rules: string[] = []
+  if (has.speakers) rules.push('Each join says which speaker, measured from the voices, says the last line before it and the first line after it. When they differ, the join is faithful only if the clip still plays as two people, a question and its answer for instance; a join that makes two speakers sound like one statement, or answers one person\'s question with what was said to another, is not faithful.')
+  if (has.topics) rules.push('A join marked as crossing a topic change puts together moments from different subjects, measured from the words: it is seamless only when the lines after it plainly continue the thought before it.')
+  return rules.join(' ')
+}
 
 interface JoinVerdict {
   index: number
@@ -905,6 +1000,25 @@ function skippedExcerpt(lines: Sentence[]): string {
 }
 
 /**
+ * What the local analysis knows about one join, as lines for the join
+ * review: who says the line either side of it, and whether it crosses a topic
+ * change. Nothing when neither is known. Exported for tests.
+ */
+export function joinFacts(lastBefore: Sentence | undefined, firstAfter: Sentence | undefined, marks: LineMarks): string[] {
+  if (!lastBefore || !firstAfter) return []
+  const facts: string[] = []
+  const said = edgeSpeaker(marks, lastBefore.index, 'last')
+  const answered = edgeSpeaker(marks, firstAfter.index, 'first')
+  if (said && answered) {
+    facts.push(said === answered
+      ? `    Speakers: Speaker ${said} says the line before the join and the line after it.`
+      : `    Speakers: Speaker ${said} says the line before the join; a different speaker, Speaker ${answered}, says the line after it.`)
+  }
+  if (topicChangeBetween(marks, lastBefore.index, firstAfter.index)) facts.push('    Topic: the join crosses a topic change.')
+  return facts
+}
+
+/**
  * Third pass, for clips that join separate moments: every join is judged for
  * whether it plays seamlessly and whether it keeps what was said. A joined
  * clip is the one place this pipeline can put words together that were not
@@ -918,6 +1032,7 @@ async function reviewJoins(
   model: string,
   transcript: Transcript,
   clips: Clip[],
+  marks: LineMarks,
   signal?: AbortSignal
 ): Promise<Clip[]> {
   const joined = clips.filter((clip) => clip.stitch)
@@ -936,7 +1051,8 @@ async function reviewJoins(
           `  Join ${n + 1} (skips ${(part.start - parts[n].end).toFixed(0)}s):`,
           `    Plays before: ${before.map((s) => s.text).join(' ')}`,
           `    Skipped: ${skippedExcerpt(skipped) || '(no speech)'}`,
-          `    Plays after: ${after.map((s) => s.text).join(' ')}`
+          `    Plays after: ${after.map((s) => s.text).join(' ')}`,
+          ...joinFacts(before.at(-1), after[0], marks)
         ].join('\n')
       })
       return [`Clip ${i} — "${clip.title}". Editor's reason for the join: ${clip.stitch?.reason || 'none given'}`, ...joins].join('\n')
@@ -945,7 +1061,7 @@ async function reviewJoins(
       apiKey,
       model,
       [
-        { role: 'system', content: JOIN_SYSTEM_PROMPT },
+        { role: 'system', content: [JOIN_SYSTEM_PROMPT, joinMarksGuidance(marks)].filter(Boolean).join('\n\n') },
         { role: 'user', content: `Judge each joined clip below. Return one entry per clip, in order.\n\n${blocks.join('\n\n')}` }
       ],
       'clip_joins',
@@ -1096,6 +1212,9 @@ Score each candidate 0-99 on the same rubric used to find it: hook strength in t
 
 Judge the clips against each other, not each in isolation: the best candidate here should score clearly above an ordinary one and the weakest clearly below. Spread the scores over the range the clips deserve instead of giving most of them nearly the same number. Judge only from the text shown, which is what plays. A clip that opens on something said before it, or stops before its point lands, scores low on hook and structure however good its topic.`
 
+/** Said to the rerank when some candidates carry audience reactions. */
+const RERANK_REACTIONS_NOTE = 'A [laughter], [applause] or [reaction] after a line means the audience reacted to it, measured from the audio: count it as evidence the moment lands, not as a substitute for a hook.'
+
 const RERANK_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -1123,11 +1242,14 @@ const RERANK_TEXT_CHARS = 900
 /**
  * What a candidate plays, as text: only its played parts (a join is marked),
  * and for a long clip its opening and its close, which the rubric weighs
- * most, with the middle elided. Exported for tests.
+ * most, with the middle elided. With `marks`, a line the audience reacted to
+ * is followed by "[laughter]", "[applause]" or "[reaction]". Exported for tests.
  */
-export function playedText(clip: Clip, sentences: Sentence[], maxChars = RERANK_TEXT_CHARS): string {
+export function playedText(clip: Clip, sentences: Sentence[], maxChars = RERANK_TEXT_CHARS, marks: LineMarks = NO_MARKS): string {
   const text = candidateRanges(clip)
-    .map((part) => sentencesInRange(sentences, part.start + 0.2, part.end - 0.2).map((s) => s.text).join(' '))
+    .map((part) => sentencesInRange(sentences, part.start + 0.2, part.end - 0.2)
+      .map((s) => `${s.text}${marks.reactions.has(s.index) ? ` [${marks.reactions.get(s.index)}]` : ''}`)
+      .join(' '))
     .filter(Boolean)
     .join(' [cut] ')
   if (text.length <= maxChars) return text
@@ -1176,20 +1298,22 @@ async function rerankCandidates(
   transcript: Transcript,
   clips: Clip[],
   dangling: Set<string>,
+  marks: LineMarks,
   signal?: AbortSignal
 ): Promise<Clip[]> {
   if (clips.length < 2) return clips
   const sentences = transcriptSentences(transcript)
   const blocks = clips.map((clip, i) => {
     const played = clip.suggestedEnd - clip.suggestedStart - skippedSec(clip)
-    return `Candidate ${i} — "${clip.title}" (${Math.round(played)}s${clip.stitch ? ', joined from separate moments' : ''}):\n  ${playedText(clip, sentences)}`
+    return `Candidate ${i} — "${clip.title}" (${Math.round(played)}s${clip.stitch ? ', joined from separate moments' : ''}):\n  ${playedText(clip, sentences, RERANK_TEXT_CHARS, marks)}`
   })
+  const reacted = marks.reactions.size > 0
   try {
     const res = await chatJSON<{ scores?: Array<{ index?: unknown; score?: unknown; reason?: unknown }> }>(
       apiKey,
       model,
       [
-        { role: 'system', content: RERANK_SYSTEM_PROMPT },
+        { role: 'system', content: reacted ? `${RERANK_SYSTEM_PROMPT}\n\n${RERANK_REACTIONS_NOTE}` : RERANK_SYSTEM_PROMPT },
         {
           role: 'user',
           content: `Score every candidate below against the others. Return one entry per candidate.\n\n${blocks.join('\n\n')}`
@@ -1282,10 +1406,22 @@ export interface AnalysisWindow {
  * than fixed-size with a stub at the end, and a window with no speech (a
  * music break) is dropped. Returns one window when the speech is short
  * enough for a single request. `minOverlapSec` widens the overlap, for
- * analysis that relates moments further apart than one clip. Exported for
- * tests.
+ * analysis that relates moments further apart than one clip.
+ *
+ * With `topics` (line numbers that open a new topic), each inner window
+ * edge is moved outward to the nearest topic change within TOPIC_SNAP_SEC:
+ * a start earlier, an end later, preferring a coarse change (a change of
+ * subject) to a fine one when both are in reach. Only ever outward, so every
+ * overlap only grows and the coverage above still holds; a window ends on a
+ * change of subject instead of halfway through one, and grows by at most
+ * TOPIC_SNAP_SEC at each edge. Exported for tests.
  */
-export function planAnalysisWindows(sentences: Sentence[], maxClipSec: number, minOverlapSec = 0): AnalysisWindow[] {
+export function planAnalysisWindows(
+  sentences: Sentence[],
+  maxClipSec: number,
+  minOverlapSec = 0,
+  topics: TopicBoundaries = { fine: [], coarse: [] }
+): AnalysisWindow[] {
   if (sentences.length === 0) return []
   const from = sentences[0].start
   const to = sentences[sentences.length - 1].end
@@ -1296,13 +1432,49 @@ export function planAnalysisWindows(sentences: Sentence[], maxClipSec: number, m
   const count = Math.ceil((span - overlap) / (WINDOW_TARGET_SEC - overlap))
   const length = (span + (count - 1) * overlap) / count
   const windows: AnalysisWindow[] = []
+  const fine = topicChangeTimes(sentences, topics.fine)
+  const coarse = topicChangeTimes(sentences, topics.coarse)
+  const snapEdge = (time: number, direction: 'earlier' | 'later', limit: number): number => {
+    const major = snapOutward(time, coarse, direction, limit)
+    return major !== time ? major : snapOutward(time, fine, direction, limit)
+  }
   for (let i = 0; i < count; i++) {
-    const start = from + i * (length - overlap)
-    const end = i === count - 1 ? to : start + length
+    const planned = from + i * (length - overlap)
+    const start = i === 0 ? planned : snapEdge(planned, 'earlier', from)
+    const end = i === count - 1 ? to : snapEdge(planned + length, 'later', to)
     const inside = sentences.filter((s) => s.end > start && s.start < end)
     if (inside.length > 0) windows.push({ index: windows.length, from: start, to: end, sentences: inside })
   }
   return windows
+}
+
+/** Furthest a window edge moves to land on a topic change. */
+const TOPIC_SNAP_SEC = 90
+
+/** The time of each topic change: the middle of the pause before the line that opens the topic. */
+function topicChangeTimes(sentences: Sentence[], topicStarts: number[]): number[] {
+  if (topicStarts.length === 0) return []
+  const position = new Map(sentences.map((s, i) => [s.index, i]))
+  return topicStarts
+    .flatMap((line) => {
+      const i = position.get(line)
+      return i === undefined || i === 0 ? [] : [(sentences[i - 1].end + sentences[i].start) / 2]
+    })
+    .sort((a, b) => a - b)
+}
+
+/** The nearest change at or beyond `time` in one direction within TOPIC_SNAP_SEC, kept inside `limit`; otherwise `time`. */
+function snapOutward(time: number, changes: number[], direction: 'earlier' | 'later', limit: number): number {
+  let best = time
+  let bestDist = TOPIC_SNAP_SEC
+  for (const t of changes) {
+    const dist = direction === 'earlier' ? time - t : t - time
+    if (dist >= 0 && dist <= bestDist) {
+      best = t
+      bestDist = dist
+    }
+  }
+  return direction === 'earlier' ? Math.max(limit, best) : Math.min(limit, best)
 }
 
 /** How many clips to ask one window for: about one per minute it covers. */
@@ -1438,6 +1610,7 @@ async function proposeLongRangeJoins(
   options: AnalyzeOptions,
   videoDurationSec: number,
   pairings: OutlinePairing[],
+  marks: LineMarks,
   signal?: AbortSignal
 ): Promise<Clip[]> {
   const shown = pairings
@@ -1445,13 +1618,14 @@ async function proposeLongRangeJoins(
     // Neighbourhoods that touch are not distant moments; nothing here to join.
     .filter((p) => p.setup.length > 0 && p.payoff.length > 0 && p.setup[p.setup.length - 1].index < p.payoff[0].index)
   if (shown.length === 0) return []
+  const system = [SYSTEM_PROMPT, markingsGuidance(marks), STITCH_PROMPT, LONG_RANGE_PROMPT].filter(Boolean).join('\n\n')
 
   const blocks = shown.map(({ pairing, setup, payoff }, i) => [
     `Pairing ${i} — the outline's reason: "${pairing.reason || 'none given'}"`,
     `First moment (${pairing.setupLabel}), lines #${setup[0].index} to #${setup[setup.length - 1].index}:`,
-    formatTranscriptForModel(setup, { durations: true }),
+    formatTranscriptForModel(setup, { durations: true, marks }),
     `Second moment (${pairing.payoffLabel}), lines #${payoff[0].index} to #${payoff[payoff.length - 1].index}:`,
-    formatTranscriptForModel(payoff, { durations: true })
+    formatTranscriptForModel(payoff, { durations: true, marks })
   ].join('\n'))
   const user = [
     `Video duration: ${videoDurationSec.toFixed(1)} seconds.`,
@@ -1469,7 +1643,7 @@ async function proposeLongRangeJoins(
       apiKey,
       model,
       [
-        { role: 'system', content: `${SYSTEM_PROMPT}\n\n${STITCH_PROMPT}\n\n${LONG_RANGE_PROMPT}` },
+        { role: 'system', content: system },
         { role: 'user', content: user }
       ],
       'long_range_joins',
@@ -1541,7 +1715,7 @@ async function proposeLongRangeJoins(
         apiKey,
         model,
         [
-          { role: 'system', content: `${SYSTEM_PROMPT}\n\n${STITCH_PROMPT}\n\n${LONG_RANGE_PROMPT}` },
+          { role: 'system', content: system },
           { role: 'user', content: repairPrompt(user, res, result.violations) }
         ],
         'long_range_joins',
@@ -1599,10 +1773,91 @@ export function fitJoinedSegments(
 
 /** Where the outline lives between runs, and whose model built it. */
 export interface HighlightContext {
-  /** Directory for the cached video outline (inside the project folder); no caching without it. */
+  /**
+   * Directory for what is derived from the transcript alone and reused across
+   * regenerations (the video outline, topic boundaries), inside the project
+   * folder; no caching without it.
+   */
   cacheDir?: string
   /** The effective provider and model identity, as in settings' analysisProviderKey. */
   providerCacheKey?: string
+  /**
+   * The sentence embedder for topic boundaries. Absent: the downloaded local
+   * model, when this process may use it; null: no topic boundaries.
+   */
+  embedder?: SentenceEmbedder | null
+}
+
+/**
+ * Topic boundaries for the transcript, local and request-free; null when
+ * there is no embedder or detection fails, and selection carries on without.
+ */
+async function findTopics(
+  sentences: Sentence[],
+  context: HighlightContext | undefined,
+  signal?: AbortSignal,
+  onProgress?: (progress: HighlightProgress) => void
+): Promise<TopicBoundaries | null> {
+  try {
+    const embedder = context?.embedder !== undefined
+      ? context.embedder
+      : await defaultSentenceEmbedder(signal, () => onProgress?.({ fraction: 0, message: 'Downloading the topic model…' }))
+    if (!embedder) return null
+    onProgress?.({ fraction: 0, message: 'Finding topic changes…' })
+    return await detectTopics({ sentences, embedder, cacheDir: context?.cacheDir, signal })
+  } catch (err) {
+    signal?.throwIfAborted()
+    console.error('Topic detection failed; clips are chosen without topic boundaries:', err)
+    return null
+  }
+}
+
+/** A beat of the audience's reaction kept after a clip's last line. */
+const REACTION_BEAT_SEC = 1.5
+
+/**
+ * Let a clip that ends on a line the audience reacts to run a beat into the
+ * reaction: a punchline cut off before the laugh lands flat. The end moves
+ * to REACTION_BEAT_SEC into the reaction (or its end, if sooner), never past
+ * the next word spoken, the video's end or the length cap, and never earlier.
+ * Only reactions as loud as the ones marked for the model, and no music.
+ * Exported for tests.
+ */
+export function extendIntoReactions(
+  clips: Clip[],
+  transcript: Transcript,
+  sentences: Sentence[],
+  videoDurationSec: number,
+  maxDuration: number
+): Clip[] {
+  const reactions = (transcript.reactions ?? [])
+    .filter((r) => r.strength >= MIN_REACTION_STRENGTH && r.kind !== 'music')
+    .sort((a, b) => a.start - b.start)
+  if (reactions.length === 0) return clips
+  const wordStarts = transcript.segments
+    .flatMap((seg) => seg.words.filter((w) => w.text.length > 0).map((w) => w.start))
+    .sort((a, b) => a - b)
+  return clips.map((clip) => {
+    const end = clip.suggestedEnd
+    const lastPart = candidateRanges(clip).at(-1)
+    if (!lastPart) return clip
+    // The last line the clip plays.
+    let last: Sentence | undefined
+    for (const s of sentences) {
+      if (s.end > end + 0.05) break
+      if (s.start >= lastPart.start - 0.5) last = s
+    }
+    if (!last) return clip
+    const line = last
+    const reaction = reactions.find((r) => r.start >= line.start && r.start <= line.end + REACTION_LAG_SEC && r.end > end)
+    if (!reaction) return clip
+    const nextWord = wordStarts.find((t) => t > line.end + 0.01)
+    let target = Math.min(reaction.start + REACTION_BEAT_SEC, reaction.end, videoDurationSec)
+    if (nextWord !== undefined) target = Math.min(target, nextWord - 0.05)
+    const played = clip.suggestedEnd - clip.suggestedStart - skippedSec(clip)
+    if (target <= end + 0.05 || played + (target - end) > maxDuration) return clip
+    return { ...clip, suggestedEnd: target, edit: { ...clip.edit, end: target } }
+  })
 }
 
 /**
@@ -1621,6 +1876,7 @@ async function joinDistantMoments(
   videoDurationSec: number,
   windows: AnalysisWindow[],
   context: HighlightContext | undefined,
+  marks: LineMarks,
   signal?: AbortSignal,
   onProgress?: (progress: HighlightProgress) => void
 ): Promise<Clip[]> {
@@ -1639,7 +1895,7 @@ async function joinDistantMoments(
   const pairings = longRangePairings(outline.pairings, windows)
   if (pairings.length === 0) return []
   report('Joining distant moments…')
-  return proposeLongRangeJoins(apiKey, model, transcript, sentences, options, videoDurationSec, pairings, signal)
+  return proposeLongRangeJoins(apiKey, model, transcript, sentences, options, videoDurationSec, pairings, marks, signal)
 }
 
 export interface HighlightProgress {
@@ -1666,9 +1922,16 @@ export async function detectHighlights(
   // that only sees segment boundaries can only propose segment boundaries;
   // sentence lines let it cut where a thought actually starts and stops.
   const sentences = transcriptSentences(transcript)
+  // Local, request-free context for the model: who speaks each line (from
+  // diarization), where the audience reacts (from the audio), where the
+  // topic changes (TextTiling) and what format the video is. Each is
+  // optional; without them the requests are exactly what they were.
+  const topics = await findTopics(sentences, context, signal, onProgress)
+  const marks = transcriptMarks(transcript, sentences, topics?.fine ?? [])
+  const format = videoTypeGuidance(options.videoType, options.videoType === 'auto' ? inferVideoType(transcript, sentences) : null)
   const windows = requestsAreScarce() && sentences.length > 0
     ? [{ index: 0, from: sentences[0].start, to: sentences[sentences.length - 1].end, sentences }]
-    : planAnalysisWindows(sentences, maxDuration, options.stitch ? STITCH_WINDOW_OVERLAP_SEC : 0)
+    : planAnalysisWindows(sentences, maxDuration, options.stitch ? STITCH_WINDOW_OVERLAP_SEC : 0, topics ?? undefined)
   const windowed = windows.length > 1
 
   const find = async (insist: boolean): Promise<Clip[]> => {
@@ -1681,7 +1944,9 @@ export async function detectHighlights(
       try {
         found[i] = await requestHighlights(apiKey, model, transcript, sentences, options, videoDurationSec, {
           insist,
-          window: windowed ? { ...window, count: windows.length } : null
+          window: windowed ? { ...window, count: windows.length } : null,
+          marks,
+          format
         }, signal)
       } catch (err) {
         // One part of a long video failing (after the client's own retries)
@@ -1716,7 +1981,7 @@ export async function detectHighlights(
   // further apart only the outline can pair. Never on the scarce route, and a
   // single window already showed the model every pair of moments.
   if (options.stitch && windowed && !requestsAreScarce()) {
-    const distant = await joinDistantMoments(apiKey, model, transcript, sentences, options, videoDurationSec, windows, context, signal, onProgress)
+    const distant = await joinDistantMoments(apiKey, model, transcript, sentences, options, videoDurationSec, windows, context, marks, signal, onProgress)
     if (distant.length > 0) {
       // Into the same list as the windowed clips, before the join review, so
       // they are judged like any other join; the list keeps its size so the
@@ -1726,11 +1991,11 @@ export async function detectHighlights(
     }
   }
   if (found.some((clip) => clip.stitch)) onProgress?.({ fraction: FIND_SHARE, message: 'Checking joined moments…' })
-  const joinChecked = await reviewJoins(apiKey, model, transcript, found, signal)
+  const joinChecked = await reviewJoins(apiKey, model, transcript, found, marks, signal)
   // Free and deterministic, so before the reviews: the ending and opening
   // reviews then judge the clip as it now opens.
   onProgress?.({ fraction: FIND_SHARE, message: 'Checking clip endings…' })
-  const refined = await refineClipEndings(apiKey, model, transcript, joinChecked, videoDurationSec, maxDuration, signal)
+  const refined = await refineClipEndings(apiKey, model, transcript, joinChecked, videoDurationSec, maxDuration, marks, signal)
   if (options.hookFirst) onProgress?.({ fraction: (1 + FIND_SHARE) / 2, message: 'Checking clip openings…' })
   const reviewed = options.hookFirst
     ? await refineClipStarts(apiKey, model, transcript, refined, signal)
@@ -1738,7 +2003,9 @@ export async function detectHighlights(
   // Free and deterministic, and after the opening review so it judges each
   // clip's final opening: one the review already moved past "And…" is not
   // penalised for it, and one the review moved onto "And…" is caught.
-  const { clips: trimmed, dangling } = checkClipOpenings(transcript, reviewed, videoDurationSec, maxDuration)
+  const { clips: opened, dangling } = checkClipOpenings(transcript, reviewed, videoDurationSec, maxDuration)
+  // Free and deterministic: a punchline keeps a beat of its laugh.
+  const trimmed = extendIntoReactions(opened, transcript, sentences, videoDurationSec, maxDuration)
   // Windows scored their clips blind to each other; put them on one scale.
   // Last, so it judges each clip as it will finally play. A single request
   // already compared every clip it returned, and the scarce route cannot
@@ -1746,7 +2013,7 @@ export async function detectHighlights(
   let ranked = trimmed
   if (windowed && !requestsAreScarce() && trimmed.length > 1) {
     onProgress?.({ fraction: (3 + FIND_SHARE) / 4, message: 'Comparing clips across the video…' })
-    ranked = await rerankCandidates(apiKey, model, transcript, trimmed, dangling, signal)
+    ranked = await rerankCandidates(apiKey, model, transcript, trimmed, dangling, marks, signal)
   }
   onProgress?.({ fraction: 1, message: 'Finding spoken moments…' })
   // Last, on each clip as it will finally play, so neither a review nor the
@@ -1754,17 +2021,24 @@ export async function detectHighlights(
   ranked = applyLengthPenalties(ranked, softMaxDurationFor(options.clipLength))
   // Refinement can pull two clips onto the same landing beat; dedupe again,
   // best first (the opening check's penalty may have changed the order).
-  return dedupeClips([...ranked].sort((a, b) => b.viralityScore - a.viralityScore).filter((c) =>
+  const final = dedupeClips([...ranked].sort((a, b) => b.viralityScore - a.viralityScore).filter((c) =>
     Number.isFinite(c.edit.start) && Number.isFinite(c.edit.end) &&
     c.edit.start >= 0 && c.edit.end <= videoDurationSec &&
     c.edit.end > c.edit.start && selectedDuration(c.edit) <= maxDuration
   ))
+  // Last, on the final scores: the first few clips cover different kinds of
+  // moment where that costs no clearly better clip its place.
+  return diversifyClipOrder(final)
 }
 
 interface HighlightRequest {
   insist: boolean
   /** The part of a long transcript this request covers; null for the whole of it. */
   window: (AnalysisWindow & { count: number }) | null
+  /** Speaker, reaction and topic marks for the lines. */
+  marks: LineMarks
+  /** The format paragraph for the prompt ('' for none). */
+  format: string
 }
 
 /**
@@ -1979,6 +2253,7 @@ export function landSelection(res: Partial<HighlightResponse> | null | undefined
     // The parts are summed here rather than trusting the model's own total.
     const scoreParts = normalizeScoreParts(raw.score_parts)
     const fallbackScore = Number.isFinite(raw.virality_score) ? Math.round(raw.virality_score) : 0
+    const kind = parseClipKind(raw.kind)
     return {
       id: randomUUID(),
       suggestedStart: start,
@@ -1990,6 +2265,7 @@ export function landSelection(res: Partial<HighlightResponse> | null | undefined
       viralityReason: raw.virality_reason,
       ...(scoreParts ? { scoreBreakdown: scoreParts } : {}),
       ...(cuts.length ? { stitch: { segments: moments, reason: (raw.join_reason ?? '').trim() } } : {}),
+      ...(kind ? { kind } : {}),
       visualSummary: null,
       hashtags: (Array.isArray(raw.hashtags) ? raw.hashtags : []).map((h) => String(h).replace(/^#/, '').toLowerCase()),
       thumbnailPath: null,
@@ -2043,10 +2319,10 @@ async function requestHighlights(
   request: HighlightRequest,
   signal?: AbortSignal
 ): Promise<Clip[]> {
-  const { insist, window } = request
+  const { insist, window, marks } = request
   const stitch = options.stitch === true
   const shown = window ? window.sentences : sentences
-  const transcriptText = formatTranscriptForModel(shown)
+  const transcriptText = formatTranscriptForModel(shown, { marks })
 
   const targetCount = window ? windowClipCount(window) : targetClipCount(videoDurationSec)
   const scope = window ? 'this part' : 'the whole video'
@@ -2060,6 +2336,7 @@ async function requestHighlights(
       ? `This is part ${window.index + 1} of ${window.count} of the transcript, covering ${formatTimestamp(window.from)} to ${formatTimestamp(window.to)}; the other parts are analysed separately. Choose clips only from the lines below, and score them on the rubric's absolute scale so they can be ranked against clips from the other parts: an ordinary part of the video should produce ordinary scores.`
       : '',
     lengthGuidance(options.clipLength),
+    request.format,
     insist
       ? `You MUST return at least 3 clips. Even if no moment feels exceptional, select the 3 strongest available moments and score them honestly (low scores are fine). ${span}`
       : `Aim for about ${targetCount} clips spread across ${scope}. Be generous: return every distinct moment strong enough to stand alone as a clip and let honest scores rank them — err on the side of more clips rather than fewer (at least ${Math.min(4, targetCount)}; fewer only if the material genuinely cannot support more). ${span}`,
@@ -2072,7 +2349,7 @@ async function requestHighlights(
     .filter(Boolean)
     .join('\n\n')
 
-  const system = stitch ? `${SYSTEM_PROMPT}\n\n${STITCH_PROMPT}` : SYSTEM_PROMPT
+  const system = [SYSTEM_PROMPT, markingsGuidance(marks), stitch ? STITCH_PROMPT : ''].filter(Boolean).join('\n\n')
   const ask = (user: string): Promise<HighlightResponse> =>
     chatJSON<HighlightResponse>(
       apiKey,

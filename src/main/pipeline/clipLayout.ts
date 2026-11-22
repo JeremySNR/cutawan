@@ -8,6 +8,7 @@ import { refineComposition } from './composition'
 import { assessClipVisuals } from './visualScore'
 import { screenTransitions } from './screenCuts'
 import { refreshGapActivity } from './gapActivity'
+import { captionSafety, detectBurnedInText } from './captionSafety'
 import type { LayoutMemory } from './layoutMemory'
 
 async function inOrder<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
@@ -28,6 +29,7 @@ export async function analyzeClipLayout(
       (!clip.visualLayout?.kind || clip.visualLayout.start > clip.edit.start || clip.visualLayout.end < clip.edit.end)) {
     const visual = await assessClipVisuals(apiKey, model, videoPath, transcript, clip, signal)
     if (visual) clip.visualLayout = visual.visualLayout
+    if (visual?.emphasis && !clip.emphasis) clip.emphasis = visual.emphasis
   }
   const screen = clip.visualLayout?.kind === 'screen' && videoType !== 'talking-head' &&
     clip.visualLayout.start <= clip.edit.start && clip.visualLayout.end >= clip.edit.end
@@ -49,6 +51,10 @@ export async function analyzeClipLayout(
   // only, so it runs for every video type, with or without an API key or
   // face analysis, and before composition so the AI sees the same edit.
   await refreshGapActivity(videoPath, clip, transcript, signal)
+  // Where faces and burned-in text sit, so captions can step around them.
+  // Local and cheap (keyframes only), so it runs for every clip.
+  clip.captionSafety = captionSafety({ start: clip.edit.start, end: clip.edit.end }, analysis?.faceBands ?? [],
+    await detectBurnedInText(videoPath, stretches, signal))
   if (apiKey && videoType !== 'talking-head') {
     await refineComposition(apiKey, model, videoPath, clip, analysis.sceneCuts, signal,
       analysis.focusTrack, analysis.sceneTransitions, transcript, memory)

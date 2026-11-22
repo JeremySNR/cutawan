@@ -19,6 +19,7 @@ import {
 import { useStore } from '../store'
 import { formatDuration, formatBytes } from '../lib/format'
 import MissingSourceBanner from './MissingSourceBanner'
+import BatchQueue from './BatchQueue'
 import DiscoverySummary from './DiscoverySummary'
 import { EditorialRankingSummary } from './EditorialSummary'
 import { SOURCE_DISCOVERY_BUDGET } from '@shared/sourceAnalysis'
@@ -34,6 +35,8 @@ import { findWholeVideoClip, highlightClips } from '@shared/wholeVideo'
 import { VIDEO_TYPE_OPTIONS } from '@shared/videoType'
 import { isChromiumBrowser } from '@shared/cookies'
 import { isVideoFile } from '@shared/video'
+import { LICENCE_WARNING } from '@shared/importLicence'
+import type { ImportLicence } from '@shared/types'
 
 const COOKIE_BROWSERS: Array<{ value: BrowserCookieSource; label: string }> = [
   { value: '', label: 'No login' },
@@ -57,11 +60,14 @@ const LENGTH_OPTIONS: Array<{ value: ClipLengthPreference; label: string; hint: 
 
 export default function HomeScreen(): React.JSX.Element {
   const project = useStore((s) => s.project)
+  // The queue stays in view while it has items, even with a project open.
+  const hasQueue = useStore((s) => s.batch.items.length > 0)
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-8 py-10">
         {project ? <SetupPanel /> : <ImportHero />}
+        {(!project || hasQueue) && <BatchQueue />}
         <RecentProjects />
       </div>
     </div>
@@ -73,6 +79,7 @@ function ImportHero(): React.JSX.Element {
   const importVideoFromPath = useStore((s) => s.importVideoFromPath)
   const importVideoFromUrl = useStore((s) => s.importVideoFromUrl)
   const importProgress = useStore((s) => s.importProgress)
+  const importLicence = useStore((s) => s.importLicence)
   const setPipelineError = (msg: string | null): void => useStore.setState({ pipelineError: msg })
   const pipelineError = useStore((s) => s.pipelineError)
   const [busy, setBusy] = useState(false)
@@ -176,6 +183,7 @@ function ImportHero(): React.JSX.Element {
                 }
               />
             </div>
+            {importLicence && <LicenceNotice licence={importLicence} className="mt-3" />}
           </div>
         ) : (
           <>
@@ -300,7 +308,11 @@ function SetupPanel(): React.JSX.Element {
   // On by default: the opening seconds decide whether a clip is watched. It
   // costs one more analysis request, so it stays opt-in on ChatGPT sign-in,
   // where requests count against a small daily cap.
-  const [hookFirst, setHookFirst] = useState(settings?.subscription.provider !== 'chatgpt')
+  // Derived rather than read once, so connecting ChatGPT (or leaving it)
+  // while this panel is open moves the default — until the user picks.
+  const [hookChoice, setHookChoice] = useState<boolean | null>(null)
+  const hookFirst = hookChoice ?? (settings?.subscription.provider !== 'chatgpt')
+  const setHookFirst = (on: boolean): void => setHookChoice(on)
   const [visualDiscovery, setVisualDiscovery] = useState(project.visualDiscovery ?? false)
   const [editorialRanking, setEditorialRanking] = useState(project.rankingEnabled ?? false)
   const [stitch, setStitch] = useState(false)
@@ -338,6 +350,7 @@ function SetupPanel(): React.JSX.Element {
       </div>
 
       <MissingSourceBanner />
+      {project.importLicence && <LicenceNotice licence={project.importLicence} className="mt-4" />}
 
       <div className="mt-6 grid grid-cols-5 gap-6">
         <div className="col-span-2 rounded-2xl border border-surface-700 bg-surface-900 p-5">
@@ -608,6 +621,27 @@ function SetupPanel(): React.JSX.Element {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Non-blocking reuse notice for a URL import whose source is not marked
+ * Creative Commons (or says nothing). Shown on the import progress and the
+ * setup screen; it never stops the import or the analysis.
+ */
+export function LicenceNotice({ licence, className = '' }: { licence: ImportLicence; className?: string }): React.JSX.Element | null {
+  if (licence.reusable) return null
+  return (
+    <div
+      data-testid="licence-notice"
+      className={`flex items-start gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] px-4 py-2.5 text-left text-xs leading-relaxed text-amber-300 ${className}`}
+    >
+      <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+      <span>
+        {LICENCE_WARNING}
+        {licence.license && <span className="text-amber-300/70"> The source lists: {licence.license}.</span>}
+      </span>
     </div>
   )
 }

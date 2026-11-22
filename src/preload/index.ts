@@ -7,10 +7,15 @@ import type {
   CustomFont,
   ExportOptions,
   BackgroundReframeEvent,
+  BatchItemSource,
+  BatchQueueState,
   ExportProgress,
   ExportResult,
   GpuEncoderStatus,
   ImportProgress,
+  NleExportOptions,
+  NleExportResult,
+  PersonalisationSummary,
   PipelineProgress,
   Project,
   ProjectSummary,
@@ -20,6 +25,7 @@ import type {
   UpdateDownloadState
 } from '@shared/types'
 import type { OpenRouterCatalog } from '@shared/openrouter'
+import type { DubEstimate } from '@shared/dubPlan'
 
 const api = {
   checkSubscriptionSetup: (): Promise<{ message: string; requestsToday: number }> => ipcRenderer.invoke('settings:checkSubscription'),
@@ -36,6 +42,7 @@ const api = {
   },
   selectVideo: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectVideo'),
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
+  selectVideos: (): Promise<string[]> => ipcRenderer.invoke('dialog:selectVideos'),
 
   createProject: (videoPath: string): Promise<Project> => ipcRenderer.invoke('project:create', videoPath),
   createProjectFromUrl: (url: string): Promise<Project> =>
@@ -67,8 +74,43 @@ const api = {
   exportClip: (projectId: string, opts: ExportOptions): Promise<ExportResult> =>
     ipcRenderer.invoke('clip:export', projectId, opts),
   cancelExport: (clipId: string): Promise<void> => ipcRenderer.invoke('clip:cancelExport', clipId),
+  exportEdit: (projectId: string, opts: NleExportOptions): Promise<NleExportResult> =>
+    ipcRenderer.invoke('clip:exportEdit', projectId, opts),
+
+  getPersonalisation: (): Promise<PersonalisationSummary> => ipcRenderer.invoke('personalisation:get'),
+  setPersonalisationEnabled: (enabled: boolean): Promise<PersonalisationSummary> =>
+    ipcRenderer.invoke('personalisation:setEnabled', enabled),
+  resetPersonalisation: (): Promise<PersonalisationSummary> => ipcRenderer.invoke('personalisation:reset'),
+
+  getBatchQueue: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:state'),
+  addToBatch: (sources: BatchItemSource[], options: AnalyzeOptions): Promise<BatchQueueState> =>
+    ipcRenderer.invoke('batch:add', sources, options),
+  startBatch: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:start'),
+  pauseBatch: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:pause'),
+  cancelBatchItem: (id: string): Promise<BatchQueueState> => ipcRenderer.invoke('batch:cancel', id),
+  removeBatchItem: (id: string): Promise<BatchQueueState> => ipcRenderer.invoke('batch:remove', id),
+  retryBatchItem: (id: string): Promise<BatchQueueState> => ipcRenderer.invoke('batch:retry', id),
+  clearFinishedBatch: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:clearFinished'),
+  onBatchState: (cb: (state: BatchQueueState) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, state: BatchQueueState): void => cb(state)
+    ipcRenderer.on('batch:state', listener)
+    return () => ipcRenderer.removeListener('batch:state', listener)
+  },
   generateCaption: (projectId: string, clipId: string): Promise<Project> =>
     ipcRenderer.invoke('clip:generateCaption', projectId, clipId),
+  translateCaptions: (projectId: string, clipId: string, options: { language: string; doNotTranslate?: string[] }): Promise<Project> =>
+    ipcRenderer.invoke('clip:translate', projectId, clipId, options),
+  estimateDub: (projectId: string, clipId: string, choice: { model: string; voice: string }): Promise<DubEstimate> =>
+    ipcRenderer.invoke('clip:dubEstimate', projectId, clipId, choice),
+  dubClip: (projectId: string, clipId: string, choice: { model: string; voice: string }): Promise<Project> =>
+    ipcRenderer.invoke('clip:dub', projectId, clipId, choice),
+  onDubProgress: (cb: (p: { clipId: string; done: number; total: number }) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, p: { clipId: string; done: number; total: number }): void => cb(p)
+    ipcRenderer.on('dub:progress', listener)
+    return () => ipcRenderer.removeListener('dub:progress', listener)
+  },
+  /** The real OS, for choosing caption fallback fonts the export will also use. */
+  osPlatform: process.platform as string,
 
   getTimeline: (videoPath: string, startSec: number, endSec: number): Promise<TimelineData> =>
     ipcRenderer.invoke('video:timeline', videoPath, startSec, endSec),
@@ -81,6 +123,9 @@ const api = {
   importCookiesFile: (): Promise<AppSettings> => ipcRenderer.invoke('cookies:import'),
   clearCookiesFile: (): Promise<AppSettings> => ipcRenderer.invoke('cookies:clear'),
   selectBrandingLogo: (): Promise<AppSettings> => ipcRenderer.invoke('branding:selectLogo'),
+  /** Audio files in the music folder chosen in Settings (empty when none). */
+  listMusicTracks: (): Promise<Array<{ name: string; path: string }>> => ipcRenderer.invoke('music:list'),
+  chooseMusicFolder: (): Promise<AppSettings> => ipcRenderer.invoke('music:chooseFolder'),
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
   downloadUpdate: (): Promise<UpdateDownloadState> => ipcRenderer.invoke('updates:download'),
   getUpdateDownloadState: (): Promise<UpdateDownloadState> => ipcRenderer.invoke('updates:state'),

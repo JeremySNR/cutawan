@@ -21,12 +21,14 @@ import {
   Loader2,
   Palette,
   MessageSquareQuote,
+  Music,
   Server,
 } from 'lucide-react'
 import { useStore } from '../store'
 import { NotesList, userNotes, WhatsNewDialog } from './WhatsNew'
 import { parseNotes } from '@shared/releaseNotes'
 import SizeTargetControls from './SizeTargetControls'
+import PersonalisationSettings from './PersonalisationSettings'
 import { DEFAULT_BRAND_COLORS, resolveCaptionStyle } from '@shared/captionStyles'
 import type {
   BrandColors,
@@ -320,6 +322,8 @@ export default function SettingsModal(): React.JSX.Element {
           </select>
               </div>
 
+              <PersonalisationSettings />
+
               <button
                 onClick={() => void save()}
                 disabled={saving}
@@ -415,6 +419,8 @@ export default function SettingsModal(): React.JSX.Element {
         </div>
 
         <SizeTargetControls />
+
+        <MusicFolderSetting />
             </div>
           )}
 
@@ -774,6 +780,62 @@ function BrandVoiceSection(): React.JSX.Element {
       {field('tone', 'Tone of voice', 'e.g. warm, upbeat and human; confident but never salesy', 2)}
       {field('style', 'Writing style', 'e.g. British English, short sentences, no emojis', 2)}
       {field('avoid', 'Things to avoid', 'e.g. no hashtags, no hype, no corporate jargon', 2)}
+    </div>
+  )
+}
+
+/**
+ * Where background music comes from. Cutawan ships no music: tracks are
+ * only ever taken from a folder chosen here, and each clip opts in.
+ */
+function MusicFolderSetting(): React.JSX.Element {
+  const folder = useStore((s) => s.settings?.musicFolder ?? null)
+  const refreshSettings = useStore((s) => s.refreshSettings)
+  const saveSettings = useStore((s) => s.saveSettings)
+  const [tracks, setTracks] = useState<number | null>(null)
+  useEffect(() => {
+    let alive = true
+    void window.cutawan.listMusicTracks().then((list) => alive && setTracks(list.length)).catch(() => alive && setTracks(0))
+    return () => { alive = false }
+  }, [folder])
+  return (
+    <div className="mt-5" data-testid="music-folder-setting">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <Music size={15} className="text-accent-400" />
+        Background music folder
+      </label>
+      <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+        Clips with background music turned on pick a track from this folder, loop it under the
+        speech and duck it whenever someone talks. Use music you have the rights to.
+      </p>
+      <div className="mt-2.5 flex items-center gap-2">
+        <div className="min-w-0 flex-1 truncate rounded-lg border border-surface-600 bg-surface-850 px-3 py-2 text-xs text-zinc-300">
+          {folder ?? <span className="text-zinc-600">No folder chosen</span>}
+        </div>
+        <button
+          onClick={async () => {
+            await window.cutawan.chooseMusicFolder()
+            await refreshSettings()
+          }}
+          className="shrink-0 rounded-lg border border-surface-600 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:bg-surface-800"
+        >
+          {folder ? 'Change…' : 'Choose folder…'}
+        </button>
+        {folder && (
+          <button
+            onClick={() => void saveSettings({ musicFolder: null })}
+            title="Stop using this folder"
+            className="shrink-0 rounded-md p-1.5 text-zinc-600 transition hover:bg-surface-700 hover:text-red-400"
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
+      </div>
+      {folder && tracks !== null && (
+        <p className="mt-1.5 text-[11px] text-zinc-500">
+          {tracks === 0 ? 'No audio files (MP3, M4A, WAV, OGG, FLAC) found in this folder.' : `${tracks} track${tracks === 1 ? '' : 's'} found.`}
+        </p>
+      )}
     </div>
   )
 }

@@ -62,6 +62,10 @@ or end sooner, undo either.
    *seamless* (would a listener notice anything missing?) and *faithful* (does
    the joined clip mean what the speakers meant?). It sees the lines that play
    before the join, the lines that were skipped, and the lines that play after.
+   When the transcript has them, each join also states which speaker says the
+   line either side of it (from speaker diarization) and whether it crosses a
+   topic change (from the local topic detection), so a join that makes two
+   people sound like one, or stitches two subjects together, is easy to refuse.
    A joined clip is kept only on an explicit pass on both. A clip with no
    verdict is dropped, and if the review request fails, all joined clips are
    dropped and the continuous ones are kept.

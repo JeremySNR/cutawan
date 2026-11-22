@@ -10,6 +10,8 @@ import { mapLimit } from './concurrency'
 import { mediaJobs } from './mediaJobs'
 import { runFfmpeg } from './ffmpeg'
 import { analyzeClipASD } from './asd'
+import type { FaceBand } from '@shared/types'
+import { faceBandsFromTracks } from './captionSafety'
 import { planSpeakerSplits, type SpeakerSplit } from './speakerSplit'
 import { detectFaces, frameDifference, MODEL_H, MODEL_W, SCENE_CUT_THRESHOLD } from './detect'
 import {
@@ -220,6 +222,8 @@ export interface ClipFocusAnalysis {
   lowDetailShots?: Array<{ start: number; end: number }>
   /** Two-person exchanges in a shared shot, shown as a stacked split. */
   speakerSplits?: SpeakerSplit[]
+  /** The focused speaker's face extent over time, so captions can stay clear of it. */
+  faceBands?: FaceBand[]
 }
 
 /**
@@ -266,7 +270,8 @@ async function analyzeFocus(
       const speakerSplits = asd.cropSize
         ? planSpeakerSplits(asd.tracks, asd.frameCount, asd.sceneCuts, asd.fps, startSec, asd.cropSize)
         : []
-      return { focusTrack, contentType, sceneCuts, sceneTransitions, lowDetailShots, speakerSplits }
+      const faceBands = faceBandsFromTracks(asd.tracks, centres, startSec, asd.fps)
+      return { focusTrack, contentType, sceneCuts, sceneTransitions, lowDetailShots, speakerSplits, faceBands }
     }
   } catch (err) {
     if (signal?.aborted) throw err

@@ -79,6 +79,8 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y xvfb
       - run: npm ci
       - run: ./scripts/smoke-test.sh .tmp/smoke
+      # Real exports through the hidden caption window, GPU off.
+      - run: ./scripts/test-animated-captions.sh .tmp/smoke/animated-captions
       - uses: actions/upload-artifact@v4
         if: always()
         with:

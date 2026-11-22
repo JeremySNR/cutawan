@@ -15,12 +15,14 @@ export class InferenceClient {
   constructor(
     private readonly workerPath: string,
     private readonly execArgv: string[] = [],
-    private readonly timeoutMs = 120_000
+    private readonly timeoutMs = 120_000,
+    /** What stops when the child fails, for the error the user sees. */
+    private readonly feature = 'Automatic framing'
   ) {}
 
   run(modelPath: string, inputs: Record<string, TensorData>, signal?: AbortSignal,
-    vad?: InferenceRequest['vad']): Promise<Record<string, TensorData>> {
-    const result = this.queue.then(() => this.execute(modelPath, inputs, signal, vad))
+    vad?: InferenceRequest['vad'], int64Inputs?: InferenceRequest['int64Inputs']): Promise<Record<string, TensorData>> {
+    const result = this.queue.then(() => this.execute(modelPath, inputs, signal, vad, int64Inputs))
     this.queue = result.catch(() => undefined)
     return result
   }
@@ -33,7 +35,7 @@ export class InferenceClient {
   }
 
   private execute(modelPath: string, inputs: Record<string, TensorData>, signal?: AbortSignal,
-    vad?: InferenceRequest['vad']): Promise<Record<string, TensorData>> {
+    vad?: InferenceRequest['vad'], int64Inputs?: InferenceRequest['int64Inputs']): Promise<Record<string, TensorData>> {
     signal?.throwIfAborted()
     if (this.failure) throw this.failure
     clearTimeout(this.idle)
@@ -76,7 +78,7 @@ export class InferenceClient {
         else resolve(outputs!)
       }
       const failed = (error: Error): void => {
-        this.failure = new Error(`Automatic framing stopped because the inference process failed. Restart Cutawan to retry. ${error.message}`)
+        this.failure = new Error(`${this.feature} stopped because the inference process failed. Restart Cutawan to retry. ${error.message}`)
         this.close()
         finish(this.failure)
       }
@@ -100,7 +102,7 @@ export class InferenceClient {
       signal?.addEventListener('abort', abort, { once: true })
       if (signal?.aborted) return abort()
       try {
-        active.send({ id, modelPath, inputs, vad }, error => { if (error && !settled) failed(error) })
+        active.send({ id, modelPath, inputs, vad, int64Inputs }, error => { if (error && !settled) failed(error) })
       } catch (error) {
         failed(error instanceof Error ? error : new Error(String(error)))
       }
@@ -109,11 +111,24 @@ export class InferenceClient {
 }
 
 const compiledWorker = join(__dirname, 'inferenceWorker.js')
-const inference = new InferenceClient(
-  existsSync(compiledWorker) ? compiledWorker : join(__dirname, 'worker.ts'),
-  process.versions.electron ? [] : process.execArgv
-)
-process.once('exit', () => inference.close())
+
+/**
+ * A separate inference child. Long whole-source analyses use their own so a
+ * failure there (which latches a client until restart) cannot take down
+ * automatic framing, and so they can run alongside the shared one.
+ */
+export function createInferenceClient(timeoutMs?: number, feature?: string): InferenceClient {
+  const client = new InferenceClient(
+    existsSync(compiledWorker) ? compiledWorker : join(__dirname, 'worker.ts'),
+    process.versions.electron ? [] : process.execArgv,
+    timeoutMs,
+    feature
+  )
+  process.once('exit', () => client.close())
+  return client
+}
+
+const inference = createInferenceClient()
 export const runInference = inference.run.bind(inference)
 export const stopInference = inference.close.bind(inference)
 export const inferencePeakRssBytes = (): number => inference.peakRssBytes
