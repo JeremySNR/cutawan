@@ -54,6 +54,16 @@ const FINE_MIN_TOPIC = 8
 const COARSE_WINDOW = 2
 const COARSE_SMOOTHING = 0
 const COARSE_MIN_TOPIC = 2
+/**
+ * The shallowest valley that can be a boundary, in cosine similarity. The
+ * mean + std cut is relative, so on its own it finds "boundaries" in any
+ * transcript, a single-subject monologue included; this floor stops the
+ * jitter of one topic passing for a change. Measured with all-MiniLM-L6-v2
+ * on synthetic talk: changes of subject 0.8 to 1.1 deep, the deepest dip
+ * inside one subject 0.3. Real speech drifts more gently than that, so the
+ * floor sits well below both.
+ */
+const MIN_DEPTH = 0.1
 
 function cosine(a: Float32Array, b: Float32Array): number {
   let dot = 0, na = 0, nb = 0
@@ -126,9 +136,11 @@ export function depthScores(scores: number[]): number[] {
 
 /**
  * Boundaries in a sequence of vectors, as the indices of the vectors that
- * open a new topic: gaps whose depth is above mean + one standard deviation
- * of all depths and is a local maximum, taken deepest first while each topic
- * keeps at least `minTopic` vectors. Too short a sequence has no boundaries.
+ * open a new topic: gaps whose depth is above both mean + one standard
+ * deviation of all depths and MIN_DEPTH, and is a local maximum (each settled
+ * on the lowest raw score within the smoothing width), taken deepest first
+ * while each topic keeps at least `minTopic` vectors. Too short a sequence
+ * has no boundaries.
  * Pure. Exported for tests.
  */
 export function textTilingBoundaries(vectors: Float32Array[], opts: TextTilingOptions = {}): number[] {
@@ -137,19 +149,27 @@ export function textTilingBoundaries(vectors: Float32Array[], opts: TextTilingOp
   const minTopic = Math.max(1, opts.minTopic ?? FINE_MIN_TOPIC)
   const n = vectors.length
   if (n < 2 * minTopic || n < 2 * k || vectors.some((v) => v.length !== vectors[0].length)) return []
-  const scores = smoothScores(gapScores(vectors, k), smoothing)
+  const raw = gapScores(vectors, k)
+  const scores = smoothScores(raw, smoothing)
   const depth = depthScores(scores)
   const gaps = depth.slice(1)
   const mean = gaps.reduce((a, b) => a + b, 0) / gaps.length
   const std = Math.sqrt(gaps.reduce((a, b) => a + (b - mean) ** 2, 0) / gaps.length)
   const cutoff = mean + std
   const candidates: number[] = []
+  const depthAt = new Map<number, number>()
   for (let i = 1; i < n; i++) {
     // A plateau of equal depths keeps its first gap only.
     const localMax = depth[i] >= (depth[i + 1] ?? -Infinity) && depth[i] > (depth[i - 1] ?? -Infinity)
-    if (depth[i] > cutoff && depth[i] > 1e-6 && localMax) candidates.push(i)
+    if (!(depth[i] > cutoff && depth[i] >= MIN_DEPTH && localMax)) continue
+    // Smoothing finds the valley but blurs where its floor is: settle on the
+    // lowest unsmoothed score within the smoothing width.
+    let best = i
+    for (let j = Math.max(1, i - smoothing); j <= Math.min(n - 1, i + smoothing); j++) if (raw[j] < raw[best]) best = j
+    if (!candidates.includes(best)) candidates.push(best)
+    depthAt.set(best, Math.max(depthAt.get(best) ?? 0, depth[i]))
   }
-  candidates.sort((a, b) => depth[b] - depth[a] || a - b)
+  candidates.sort((a, b) => (depthAt.get(b) ?? 0) - (depthAt.get(a) ?? 0) || a - b)
   const chosen: number[] = []
   for (const i of candidates) {
     if (i < minTopic || n - i < minTopic) continue

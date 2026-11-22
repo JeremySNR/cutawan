@@ -118,4 +118,35 @@ describe('detectHighlights on ChatGPT sign-in', () => {
     await detectHighlights('key', 'model', transcript, { ...options, hookFirst: false }, transcript.durationSec)
     expect(vi.mocked(chatJSON).mock.calls.map((call) => call[3])).toEqual(['viral_clips', 'clip_endings'])
   })
+
+  it('spends no extra request on speaker, reaction and topic marks or clip kinds', async () => {
+    const marked = {
+      ...transcript,
+      speakerTurns: Array.from({ length: 27 }, (_, n) => ({ start: sentences[n * 100].start, end: sentences[n * 100 + 99].end, speaker: n % 2 })),
+      reactions: [{ start: sentences[16].end + 0.1, end: sentences[16].end + 2, strength: 0.9, kind: 'laughter' as const }]
+    }
+    // A topic every 200 lines, from a stand-in for the local embedding model.
+    const embedder = {
+      id: 'test',
+      embed: async (texts: string[]) => texts.map((t) => {
+        const v = new Float32Array(16)
+        v[Math.floor(Number(t.match(/sentence (\d+)/)?.[1] ?? 0) / 200) % 16] = 1
+        return v
+      })
+    }
+    vi.mocked(chatJSON).mockImplementation(async (_key, _model, _messages, schema) => {
+      if (schema === 'viral_clips') {
+        return { clips: Array.from({ length: 20 }, (_, n) => ({ start_line: n * 100 + 10, end_line: n * 100 + 16, kind: n % 2 ? 'funny' : 'story', ...clipFields(n) })) }
+      }
+      return schema === 'clip_endings' ? { endings: [] } : { starts: [] }
+    })
+    const clips = await detectHighlights('key', 'model', marked, options, transcript.durationSec, undefined, undefined, { embedder })
+    expect(clips).toHaveLength(20)
+    expect(vi.mocked(chatJSON).mock.calls.map((call) => call[3])).toEqual(['viral_clips', 'clip_endings', 'clip_openings'])
+    const user = vi.mocked(chatJSON).mock.calls[0][2][1].content as string
+    expect(user).toContain('(Speaker B)')
+    expect(user).toContain('[laughter after]')
+    expect(user).toContain('— topic change —')
+    expect(clips.every((c) => c.kind === 'story' || c.kind === 'funny')).toBe(true)
+  })
 })

@@ -39,7 +39,7 @@ import {
   transcriptMarks,
   type LineMarks
 } from './lineMarks'
-import { detectTopics, type SentenceEmbedder } from './topics'
+import { detectTopics, type SentenceEmbedder, type TopicBoundaries } from './topics'
 import { defaultSentenceEmbedder } from './sentenceEmbedder'
 import { inferVideoType, videoTypeGuidance } from './videoTypePrompt'
 
@@ -1408,14 +1408,20 @@ export interface AnalysisWindow {
  * enough for a single request. `minOverlapSec` widens the overlap, for
  * analysis that relates moments further apart than one clip.
  *
- * With `topicStarts` (line numbers that open a new topic), each inner window
+ * With `topics` (line numbers that open a new topic), each inner window
  * edge is moved outward to the nearest topic change within TOPIC_SNAP_SEC:
- * a start earlier, an end later. Only ever outward, so every overlap only
- * grows and the coverage above still holds; a window ends on a change of
- * subject instead of halfway through one, and grows by at most
+ * a start earlier, an end later, preferring a coarse change (a change of
+ * subject) to a fine one when both are in reach. Only ever outward, so every
+ * overlap only grows and the coverage above still holds; a window ends on a
+ * change of subject instead of halfway through one, and grows by at most
  * TOPIC_SNAP_SEC at each edge. Exported for tests.
  */
-export function planAnalysisWindows(sentences: Sentence[], maxClipSec: number, minOverlapSec = 0, topicStarts: number[] = []): AnalysisWindow[] {
+export function planAnalysisWindows(
+  sentences: Sentence[],
+  maxClipSec: number,
+  minOverlapSec = 0,
+  topics: TopicBoundaries = { fine: [], coarse: [] }
+): AnalysisWindow[] {
   if (sentences.length === 0) return []
   const from = sentences[0].start
   const to = sentences[sentences.length - 1].end
@@ -1426,11 +1432,16 @@ export function planAnalysisWindows(sentences: Sentence[], maxClipSec: number, m
   const count = Math.ceil((span - overlap) / (WINDOW_TARGET_SEC - overlap))
   const length = (span + (count - 1) * overlap) / count
   const windows: AnalysisWindow[] = []
-  const changes = topicChangeTimes(sentences, topicStarts)
+  const fine = topicChangeTimes(sentences, topics.fine)
+  const coarse = topicChangeTimes(sentences, topics.coarse)
+  const snapEdge = (time: number, direction: 'earlier' | 'later', limit: number): number => {
+    const major = snapOutward(time, coarse, direction, limit)
+    return major !== time ? major : snapOutward(time, fine, direction, limit)
+  }
   for (let i = 0; i < count; i++) {
     const planned = from + i * (length - overlap)
-    const start = i === 0 ? planned : snapOutward(planned, changes, 'earlier', from)
-    const end = i === count - 1 ? to : snapOutward(planned + length, changes, 'later', to)
+    const start = i === 0 ? planned : snapEdge(planned, 'earlier', from)
+    const end = i === count - 1 ? to : snapEdge(planned + length, 'later', to)
     const inside = sentences.filter((s) => s.end > start && s.start < end)
     if (inside.length > 0) windows.push({ index: windows.length, from: start, to: end, sentences: inside })
   }
@@ -1786,15 +1797,14 @@ async function findTopics(
   context: HighlightContext | undefined,
   signal?: AbortSignal,
   onProgress?: (progress: HighlightProgress) => void
-): Promise<number[] | null> {
+): Promise<TopicBoundaries | null> {
   try {
     const embedder = context?.embedder !== undefined
       ? context.embedder
       : await defaultSentenceEmbedder(signal, () => onProgress?.({ fraction: 0, message: 'Downloading the topic model…' }))
     if (!embedder) return null
     onProgress?.({ fraction: 0, message: 'Finding topic changes…' })
-    const topics = await detectTopics({ sentences, embedder, cacheDir: context?.cacheDir, signal })
-    return topics?.fine ?? null
+    return await detectTopics({ sentences, embedder, cacheDir: context?.cacheDir, signal })
   } catch (err) {
     signal?.throwIfAborted()
     console.error('Topic detection failed; clips are chosen without topic boundaries:', err)
@@ -1916,12 +1926,12 @@ export async function detectHighlights(
   // diarization), where the audience reacts (from the audio), where the
   // topic changes (TextTiling) and what format the video is. Each is
   // optional; without them the requests are exactly what they were.
-  const topicStarts = await findTopics(sentences, context, signal, onProgress)
-  const marks = transcriptMarks(transcript, sentences, topicStarts ?? [])
+  const topics = await findTopics(sentences, context, signal, onProgress)
+  const marks = transcriptMarks(transcript, sentences, topics?.fine ?? [])
   const format = videoTypeGuidance(options.videoType, options.videoType === 'auto' ? inferVideoType(transcript, sentences) : null)
   const windows = requestsAreScarce() && sentences.length > 0
     ? [{ index: 0, from: sentences[0].start, to: sentences[sentences.length - 1].end, sentences }]
-    : planAnalysisWindows(sentences, maxDuration, options.stitch ? STITCH_WINDOW_OVERLAP_SEC : 0, topicStarts ?? [])
+    : planAnalysisWindows(sentences, maxDuration, options.stitch ? STITCH_WINDOW_OVERLAP_SEC : 0, topics ?? undefined)
   const windowed = windows.length > 1
 
   const find = async (insist: boolean): Promise<Clip[]> => {

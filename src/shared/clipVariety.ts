@@ -56,8 +56,9 @@ export interface VarietyItem {
 }
 
 /**
- * Reorder a list sorted best first so its first N items (N = the smaller of
- * `slots` and the number of distinct kinds in the list) cover distinct kinds
+ * Reorder a list sorted best first so its first N kinded items (N = the
+ * smaller of `slots` and the number of distinct kinds in the list), within
+ * the first `slots` places, cover distinct kinds
  * where that is possible within two bounds: no item climbs more than
  * `maxPromotion` places from where it started, and none climbs above an item
  * scoring more than `maxScoreGap` points higher. Slot by slot, an item whose
@@ -76,11 +77,13 @@ export function diversifyClipOrder<T extends VarietyItem>(
   const maxScoreGap = opts.maxScoreGap ?? MAX_VARIETY_SCORE_GAP
   const out = [...items]
   const distinct = new Set(items.flatMap((item) => (item.kind ? [item.kind] : [])))
-  const n = Math.min(slots, distinct.size, out.length)
+  const n = Math.min(slots, distinct.size)
   if (n < 2) return out
   const original = new Map(items.map((item, i) => [item, i]))
   const covered = new Set<ClipKind>()
-  for (let p = 0; p < n; p++) {
+  // A kindless item keeps its slot without covering a kind, so the walk goes
+  // on past it, but never beyond the first `slots` places.
+  for (let p = 0; p < Math.min(slots, out.length) && covered.size < n; p++) {
     const here = out[p]
     if (!here.kind || !covered.has(here.kind)) {
       if (here.kind) covered.add(here.kind)
@@ -97,8 +100,9 @@ export function diversifyClipOrder<T extends VarietyItem>(
         break
       }
       jumped = Math.max(jumped, candidate.viralityScore)
-      // Everything further down started further down, so nothing past here can qualify.
-      if (q - p >= maxPromotion + n) break
+      // An item is pushed down at most once per earlier slot, so nothing past
+      // here started within reach.
+      if (q - p >= maxPromotion + p) break
     }
     if (out[p].kind) covered.add(out[p].kind as ClipKind)
   }
