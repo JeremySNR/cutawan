@@ -10,6 +10,7 @@ import {
   buildXmeml,
   clipEditSegments,
   frameRateFromProbe,
+  sourceFrameCount,
   timelineSegments,
   type NleSource
 } from '@shared/nleExport'
@@ -87,7 +88,7 @@ export async function exportClipEdit(
   outputDir: string
 ): Promise<NleExportResult> {
   const source = await nleSource(project)
-  const segments = timelineSegments(clipEditSegments(clip, project.transcript), source.rate)
+  const segments = timelineSegments(clipEditSegments(clip, project.transcript), source.rate, sourceFrameCount(source))
   if (segments.length === 0) {
     throw new Error('Nothing is left to export: every part of this clip has been cut. Undo a cut or widen the trim.')
   }

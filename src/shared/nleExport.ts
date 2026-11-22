@@ -92,14 +92,16 @@ export function clipEditSegments(clip: Pick<Clip, 'edit' | 'visualStory' | 'gapA
 /**
  * Frame-aligned timeline segments laid end to end. Pieces shorter than a
  * frame vanish, and pieces that meet in source after rounding are merged so
- * the NLE does not get a pointless through-edit.
+ * the NLE does not get a pointless through-edit. With `sourceFrames` (see
+ * sourceFrameCount), no segment reaches past the source's last whole frame:
+ * an end rounded up would point the NLE at a frame the file does not have.
  */
-export function timelineSegments(segments: KeptSegment[], rate: FrameRate): TimelineSegment[] {
+export function timelineSegments(segments: KeptSegment[], rate: FrameRate, sourceFrames = Infinity): TimelineSegment[] {
   const out: TimelineSegment[] = []
   let offset = 0
   for (const seg of segments) {
-    const from = toFrame(seg.start, rate)
-    const to = toFrame(seg.end, rate)
+    const from = Math.min(toFrame(seg.start, rate), sourceFrames)
+    const to = Math.min(toFrame(seg.end, rate), sourceFrames)
     if (to <= from) continue
     const last = out[out.length - 1]
     if (last && last.sourceIn + last.duration === from) {
