@@ -76,3 +76,17 @@ describe('editorial selection', () => {
     expect(editorialSelectionKey({ ...c, title: 'New title', edit: { ...c.edit, focusX: .7 } }, transcript)).toBe(c.editorial?.selectionKey)
   })
 })
+
+describe('editorial selection key and pauses kept for activity', () => {
+  it('is not changed by activity measured after the assessment', () => {
+    const long = makeTranscript(['One two three four five.', 'Six seven eight nine ten.'], { sentenceGapSec: 3 })
+    const assessed = { id: 'a', viralityScore: 70, edit: { start: 0, end: long.durationSec, tightenCuts: true } } as Clip
+    const before = editorialSelectionKey(assessed, long)
+    const gapStart = long.segments[0].end, gapEnd = long.segments[1].start
+    const measured = { ...assessed, gapActivity: { version: 1, start: 0, end: long.durationSec,
+      measured: [{ start: gapStart, end: gapEnd }], active: [{ start: gapStart + 0.5, end: gapEnd - 0.5 }] } } as unknown as Clip
+    expect(editorialSelectionKey(measured, long)).toBe(before)
+    // A real edit still changes it.
+    expect(editorialSelectionKey({ ...assessed, edit: { ...assessed.edit, cuts: [{ start: 0.5, end: 1 }] } }, long)).not.toBe(before)
+  })
+})

@@ -6,6 +6,51 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
+## [Unreleased]
+
+The biggest update to how Cutawan finds and cuts clips since the first release: better picks from long videos, clips that can join separate moments, smoother cuts, and scores you can read.
+
+### Added
+
+- **Join separate moments (beta).** An option on the setup screen lets a clip put two or three moments together when that makes a better clip: a question and its answer with the tangent between them removed, or a setup and the payoff that arrives much later. On long videos Cutawan first maps the whole video to find setups and their payoffs, so moments half an hour apart can be joined, not just neighbours. Every join gets its own AI check that it plays seamlessly and keeps what was said; a joined clip that fails is dropped. Joined clips are labelled on their card and in the editor, and you can move or undo the join. [How it works and its limits](docs/joined-moments.md).
+- **See why a clip scored what it did.** Every score now shows what it is made of: hook, emotion, value, flow and shareability, plus the visual review. Clip cards show a letter for each, and the editor shows the numbers under **Why this clip**. Clips found before this update keep their old score, marked "Legacy score"; regenerate to see the breakdown.
+- **Preview clips from the grid.** Rest the pointer on a clip card to play that moment, muted, without opening the editor.
+- **Move a cut.** Drag either edge of any cut on the timeline, so a piece can run a little longer or end a little sooner without undoing the cut.
+- **Pauses with something happening in them are kept.** Pause removal now checks each silent gap for movement on screen and for sound such as laughter or music, and keeps the gaps where something is going on: a demonstration, a reaction, a reveal. They show on the timeline with a green dashed edge; click one to remove it anyway. This applies to clips framed after you update; captioned whole videos are not checked.
+
+### Improved
+
+- **Better clips from long videos.** Past about twenty minutes of speech, the transcript is read in overlapping parts instead of one request, so the middle and end of a two-hour recording get the same attention as the opening. A final pass then compares every candidate side by side, so the best clips rank first wherever they came from.
+- **Clips start and end exactly on sentences.** The AI now picks clips by numbered transcript lines rather than by reading off timestamps, which it got wrong on long videos.
+- **Fewer good moments lost to a slip.** When the AI's answer breaks a rule (a clip too long, a line it was never shown), Cutawan tells it what was wrong and asks once for a corrected list, instead of dropping or bluntly trimming those clips.
+- **Better first seconds.** A clip that opens on a throwaway line ("Yeah." "Okay, so.") now starts on the sentence after it. A clip that opens on a word leaning on something earlier ("And…", "But…", "Because…") starts one sentence earlier, on the line it continues, when that fits; otherwise it ranks lower and says why.
+- **Length is a target, not a wall.** A strong clip may now run up to a quarter past the length you chose instead of being cut short before its payoff. It ranks a few points lower and says it runs long. Anything far past the target is still corrected or trimmed.
+- **No clicks at cuts.** Every cut inside a clip now gets a tiny audio fade, so pause removal and your own cuts no longer pop or click. Timing, captions and length are unchanged.
+- **Steadier lip sync in clips with many cuts.** Every cut now falls exactly on a video frame, so picture and sound stay in step through each one instead of drifting by up to a frame at every cut.
+- **Scores are more spread out and more consistent between runs.** The AI scores each part of the rubric separately and Cutawan adds them up, instead of asking for one overall number.
+- **Faster transcription of long videos** on hosted APIs (OpenAI, OpenRouter, Groq and similar): up to three parts of the audio are transcribed at once. Local Whisper, and a Whisper server on your own machine or network, still run one part at a time.
+- **Faster clip review** on API connections: up to four clips are checked at once instead of two, and endings and openings are reviewed a few clips at a time, which is also more reliable when there are many clips.
+- **Open on the hook** is now on by default on API connections, so clips start on their hook line rather than the setup before it. It stays off by default on ChatGPT sign-in, where it costs one of the day's requests.
+- **Cleaner captions.** The big-word caption styles no longer show commas and full stops, which cluttered three-word cards ("WORKS." / "SO,"). Question marks, exclamation marks and ellipses stay, and the subtitle-like styles (Minimal and Whisper) keep full punctuation. Preview and export match.
+- **Clearer progress.** The progress screen says which part of a long video is being read, when the video is being mapped, and when clips are being checked and compared.
+- **Easier trimming around long cuts.** A long cut folds into a small marker on the editor timeline, so the footage on either side gets the width.
+- **Faster exports of clips with long cuts.** The cut footage is no longer read through, and the volume is set from the audio that plays rather than the whole stretch.
+
+### Fixed
+
+- AI B-roll and post captions were written from every word in a clip's span, including parts you had cut. They now use only what plays.
+- Exporting a clip whose start or end you had cut away no longer reads through the cut footage, and its volume is set from the part that plays.
+
+### Costs and limits
+
+- On API connections, long videos use more analysis requests: about one per twelve minutes of speech to find clips (one per six minutes with **Join separate moments** on, so moments a few minutes apart are seen together), occasionally one more to correct an answer, and one to compare the clips. With joining on, mapping the video adds about one request per twelve minutes the first time (the map is saved and reused when you regenerate) and up to two to propose distant joins. That is typically a few cents per hour of video.
+- ChatGPT sign-in keeps to its earlier request count: the whole transcript in one request, no correction or comparison passes, and no mapping for distant joins, because its requests count against a daily cap.
+
+### Validation
+
+- Checked against a live OpenAI model (gpt-5.4-mini): the end-to-end test (speech, transcription, clip finding, captioned render) passes, and on a synthetic 52-minute podcast the final run joined the opening question at 0:42 to its payoff at 47:12 into one clip that passed the join review. The model routinely overshoots length when joining, so a sentence-trimming fallback does the final fit. Details and the runs that did not work: `docs/joined-moments.md`. Joined clips and gap detection were tested with real ffmpeg exports and synthetic footage; thresholds for keeping active pauses come from synthetic sources and should be checked on real recordings.
+- Automated tests with scripted model replies cover every new step, including each failure path. These do not measure audience performance or prove the clips are better than another tool's.
+
 ## [0.14.0] - 2026-10-13
 
 ### Added

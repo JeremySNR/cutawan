@@ -1,5 +1,5 @@
-import type { Clip, ClipEditState, TimeRange, Transcript } from './types'
-import { editedClipDuration, normalizeRanges } from './tighten'
+import type { ClipEditState, TimeRange, Transcript } from './types'
+import { editedClipDuration, normalizeRanges, type TightenClip } from './tighten'
 
 /**
  * Pure timeline edits shared by keyboard shortcuts, the timeline and the
@@ -43,11 +43,62 @@ export function uncutAt(edit: ClipEditState, t: number): ClipEditState {
   return cuts.length === (edit.cuts ?? []).length ? edit : { ...edit, cuts }
 }
 
+/** A cut never shrinks below this; to remove one, restore it instead. */
+export const MIN_CUT_SEC = 0.2
+/** Playable footage always left between a cut and its neighbour or the trim edge. */
+const MIN_PIECE_BESIDE_CUT_SEC = 0.5
+
+/**
+ * Move one edge of an existing cut to `t`: the way to let a moment run a
+ * little longer into what was cut, or end it a little sooner. The cut is
+ * found by its other edge, the one staying put, so a drag can keep naming
+ * the cut as it was when grabbed. The edge stops short of the cut's other
+ * edge, of the neighbouring cut and of the trim, so no piece is squeezed to
+ * nothing.
+ */
+export function moveCutEdge(edit: ClipEditState, cut: TimeRange, which: 'start' | 'end', t: number): ClipEditState {
+  const cuts = normalizeRanges(edit.cuts, edit.start, edit.end)
+  const index = cuts.findIndex(c => which === 'start' ? Math.abs(c.end - cut.end) < 1e-6 : Math.abs(c.start - cut.start) < 1e-6)
+  if (index === -1 || !Number.isFinite(t)) return edit
+  const current = cuts[index]
+  const before = (index > 0 ? cuts[index - 1].end : edit.start) + MIN_PIECE_BESIDE_CUT_SEC
+  const after = (index < cuts.length - 1 ? cuts[index + 1].start : edit.end) - MIN_PIECE_BESIDE_CUT_SEC
+  const moved = which === 'start'
+    ? { start: Math.max(before, Math.min(t, current.end - MIN_CUT_SEC)), end: current.end }
+    : { start: current.start, end: Math.min(after, Math.max(t, current.start + MIN_CUT_SEC)) }
+  if (!(moved.end > moved.start)) return edit
+  return { ...edit, cuts: cuts.map((c, i) => (i === index ? moved : c)) }
+}
+
 /** Keep a pause that automatic removal took out, or remove it again. */
 export function toggleRestored(edit: ClipEditState, pause: TimeRange): ClipEditState {
   const restored = edit.restored ?? []
   const existing = restored.find(r => r.start < pause.end && r.end > pause.start)
   return { ...edit, restored: existing ? restored.filter(r => r !== existing) : [...restored, { ...pause }] }
+}
+
+/**
+ * Remove a pause that was kept automatically for its activity (see
+ * `Clip.gapActivity`), or keep it again. The range only has to overlap the
+ * active range: re-measuring may move its edges a little.
+ */
+export function toggleActiveGap(edit: ClipEditState, pause: TimeRange): ClipEditState {
+  const removed = edit.removedActive ?? []
+  const overlapping = removed.filter(r => r.start < pause.end && r.end > pause.start)
+  return { ...edit, removedActive: overlapping.length
+    ? removed.filter(r => !overlapping.includes(r))
+    : [...removed, { start: pause.start, end: pause.end }] }
+}
+
+/**
+ * Clicking a pause that pause removal takes out. One the user removed
+ * despite its activity goes back to being kept automatically, so the two
+ * clicks are an exact toggle; any other pause is restored as before.
+ */
+export function toggleRemovedPause(edit: ClipEditState, pause: TimeRange): ClipEditState {
+  return (edit.removedActive ?? []).some(r => r.start < pause.end && r.end > pause.start)
+    ? toggleActiveGap(edit, pause)
+    : toggleRestored(edit, pause)
 }
 
 /**
@@ -80,6 +131,6 @@ export function setTrimEdge(edit: ClipEditState, which: 'start' | 'end', t: numb
 }
 
 /** A cut must leave something to play: never less than MIN_CLIP_SEC. */
-export function keepsPlayback(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): boolean {
+export function keepsPlayback(clip: TightenClip, transcript: Transcript | null): boolean {
   return editedClipDuration(clip, transcript) >= MIN_CLIP_SEC
 }

@@ -13,8 +13,11 @@ export interface KeptSegment {
   end: number
 }
 
+/** The parts of a clip that decide what pause removal keeps and cuts. */
+export type TightenClip = Pick<Clip, 'edit' | 'visualStory' | 'gapActivity'>
+
 /** Actual playback length, after pause removal and the user's cuts. */
-export function editedClipDuration(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): number {
+export function editedClipDuration(clip: TightenClip, transcript: Transcript | null): number {
   const kept = clipKeptSegments(clip, transcript)
   return kept ? kept.reduce((sum, range) => sum + range.end - range.start, 0) : clip.edit.end - clip.edit.start
 }
@@ -54,10 +57,10 @@ export function subtractRanges(ranges: TimeRange[], remove: TimeRange[]): TimeRa
  * the whole trim plays untouched. Export, preview, durations and the AI's
  * view of the edit all go through here.
  */
-export function clipKeptSegments(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): KeptSegment[] | null {
+export function clipKeptSegments(clip: TightenClip, transcript: Transcript | null): KeptSegment[] | null {
   const { start, end } = clip.edit
   const auto = clip.edit.tightenCuts && transcript
-    ? computeKeptSegments(transcript, start, end, clip.visualStory?.protectedRanges)
+    ? computeKeptSegments(transcript, start, end, clipProtectedRanges(clip))
     : null
   const cuts = normalizeRanges(clip.edit.cuts, start, end)
   const restored = auto ? normalizeRanges(clip.edit.restored, start, end) : []
@@ -69,10 +72,38 @@ export function clipKeptSegments(clip: Pick<Clip, 'edit' | 'visualStory'>, trans
 }
 
 /** What automatic pause removal takes out of the trim, for display and restore. */
-export function autoRemovedRanges(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): TimeRange[] {
+export function autoRemovedRanges(clip: TightenClip, transcript: Transcript | null): TimeRange[] {
   if (!clip.edit.tightenCuts || !transcript) return []
-  const auto = computeKeptSegments(transcript, clip.edit.start, clip.edit.end, clip.visualStory?.protectedRanges)
+  const auto = computeKeptSegments(transcript, clip.edit.start, clip.edit.end, clipProtectedRanges(clip))
   return auto ? subtractRanges([{ start: clip.edit.start, end: clip.edit.end }], auto) : []
+}
+
+/**
+ * Stretches pause removal must keep: the visual story's payoff, plus pauses
+ * measured as active (something moves or sounds in them) unless the user
+ * chose to remove that pause anyway (`edit.removedActive`).
+ */
+export function clipProtectedRanges(clip: TightenClip): TimeRange[] {
+  const removed = clip.edit.removedActive ?? []
+  const active = (clip.gapActivity?.active ?? [])
+    .filter(r => !removed.some(x => x.start < r.end && x.end > r.start))
+  return [...(clip.visualStory?.protectedRanges ?? []), ...active]
+}
+
+/** Slivers left by edge snapping are not worth a timeline mark. */
+const MIN_ACTIVITY_MARK_SEC = 0.1
+
+/**
+ * Pauses that pause removal would have cut but keeps because they were
+ * measured as active — what the timeline shows as "kept automatically".
+ * Each overlaps the active range that kept it, so it can name that range
+ * in `edit.removedActive`.
+ */
+export function activityKeptRanges(clip: TightenClip, transcript: Transcript | null): TimeRange[] {
+  if (!clip.edit.tightenCuts || !transcript || !clip.gapActivity?.active.length) return []
+  const without = autoRemovedRanges({ ...clip, gapActivity: undefined }, transcript)
+  return subtractRanges(without, autoRemovedRanges(clip, transcript))
+    .filter(r => r.end - r.start >= MIN_ACTIVITY_MARK_SEC)
 }
 
 /** Pause longer than this (between words) gets cut down. */
@@ -106,7 +137,7 @@ const BRIDGE_MAX_GAP_SEC = 1.5
 
 const FILLER_WORDS = new Set(['um', 'uh', 'uhm', 'umm', 'erm', 'er', 'ah', 'mmm', 'hmm', 'mhm'])
 
-function isFiller(text: string): boolean {
+export function isFiller(text: string): boolean {
   return FILLER_WORDS.has(text.toLowerCase().replace(/[^a-z]/g, ''))
 }
 

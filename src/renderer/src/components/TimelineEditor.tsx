@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Redo2, Scissors, SplitSquareHorizontal, Trash2, Undo2 } from 'lucide-react'
 import type { Clip, TimelineData, TimeRange } from '@shared/types'
-import { autoRemovedRanges, editedClipDuration, normalizeRanges } from '@shared/tighten'
-import { cutRange, keepsPlayback, pieceAt, setTrimEdge, splitAt, timelinePieces, toggleRestored, uncutAt } from '@shared/editOps'
+import type { TimelineScale } from '@shared/timelineScale'
+import { activityKeptRanges, autoRemovedRanges, editedClipDuration, normalizeRanges } from '@shared/tighten'
+import { cutRange, keepsPlayback, moveCutEdge, pieceAt, setTrimEdge, splitAt, timelinePieces, toggleActiveGap, toggleRemovedPause, uncutAt } from '@shared/editOps'
 import { historyState } from '@shared/editHistory'
 import { usePreviewBus } from '../lib/previewBus'
 import { useStore } from '../store'
@@ -22,12 +23,12 @@ const SHORTCUTS = 'Space/K play · J/L ±1 s · ←/→ frame · I/O in/out · S
  * Premiere-style shortcuts. Every change goes through the shared edit ops
  * and `clipKeptSegments`, so preview and export stay identical.
  */
-export default function TimelineEditor({ clip, windowStart, windowEnd, fps, timeline, onSave, onLocal }: {
+export default function TimelineEditor({ clip, scale, timelines, fps, onSave, onLocal, onDragState }: {
   clip: Clip
-  windowStart: number
-  windowEnd: number
+  scale: TimelineScale
+  timelines: Array<TimelineData | null>
   fps: number
-  timeline: TimelineData | null
+  onDragState?: (dragging: boolean) => void
   onSave: (edit: Clip['edit']) => void
   onLocal: (edit: Clip['edit']) => void
 }): React.JSX.Element {
@@ -38,13 +39,20 @@ export default function TimelineEditor({ clip, windowStart, windowEnd, fps, time
   const { canUndo, canRedo } = historyState(clip.id)
   const [selected, setSelected] = useState<TimeRange | null>(null)
   const edit = clip.edit
+  const windowStart = scale.panes[0].start
+  const windowEnd = scale.panes[scale.panes.length - 1].end
 
   const marks = useMemo<TimelineMark[]>(() => {
     const restored = normalizeRanges(edit.restored, edit.start, edit.end)
     const auto = autoRemovedRanges(clip, transcript)
       .filter((r) => !restored.some((k) => k.start < r.end && k.end > r.start))
+    // Pauses kept because something happens in them: shown as kept, and one
+    // click removes them like any other pause.
+    const active = activityKeptRanges(clip, transcript)
+      .filter((r) => !restored.some((k) => k.start < r.end && k.end > r.start))
     return [
       ...auto.map((range) => ({ range, kind: 'auto' as const })),
+      ...active.map((range) => ({ range, kind: 'active' as const })),
       ...(edit.tightenCuts ? restored.map((range) => ({ range, kind: 'restored' as const })) : []),
       ...normalizeRanges(edit.cuts, edit.start, edit.end).map((range) => ({ range, kind: 'cut' as const }))
     ]
@@ -114,11 +122,21 @@ export default function TimelineEditor({ clip, windowStart, windowEnd, fps, time
   return (
     <div>
       <TrimBar
-        windowStart={windowStart}
-        windowEnd={windowEnd}
+        scale={scale}
+        timelines={timelines}
         start={edit.start}
         end={edit.end}
-        timeline={timeline}
+        onDragState={onDragState}
+        onCutEdge={(cut, which, t) => {
+          // Read the live clip, as onCommit does: the drag spans many renders.
+          const current = useStore.getState().project?.clips.find((c) => c.id === clip.id)
+          if (!current) return
+          const next = moveCutEdge(current.edit, cut, which, t)
+          onLocal(next)
+          // Show the frame the edge now sits on, wherever the clamp left it.
+          const moved = next.cuts?.find((c) => which === 'start' ? c.end === cut.end : c.start === cut.start)
+          if (moved) usePreviewBus.getState().scrub(which === 'start' ? moved.start : moved.end)
+        }}
         onChange={(start, end) => onLocal({ ...edit, start, end })}
         onCommit={() => {
           // Read the live clip: the drag closure was created at drag start,
@@ -135,7 +153,8 @@ export default function TimelineEditor({ clip, windowStart, windowEnd, fps, time
         playsFor={editedClipDuration(clip, transcript)}
         onMarkClick={(mark) => {
           if (mark.kind === 'cut') onSave(uncutAt(edit, (mark.range.start + mark.range.end) / 2))
-          else saveTrim(toggleRestored(edit, mark.range))
+          else if (mark.kind === 'active') saveTrim(toggleActiveGap(edit, mark.range))
+          else saveTrim(toggleRemovedPause(edit, mark.range))
         }}
       />
       <div className="mt-2 flex flex-wrap items-center gap-1.5">

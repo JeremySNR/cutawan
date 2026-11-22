@@ -10,6 +10,7 @@ import { chatJSON, type ChatContentPart } from './openai'
 import { clipFrameTimes, extractClipFrames, extractFramesAtTimes } from './visualScore'
 import { probeImageDimensions, runAnalysisFfmpeg as runFfmpeg } from './ffmpeg'
 import { mapLimit } from './concurrency'
+import { sourceStretches } from '@shared/clipSegments'
 import { refineScreenDetails } from './screenDetail'
 import { reviewExistingComposition, reviewPresenterComposition, sourceRectangle } from './presenterComposition'
 import type { LayoutMemory } from './layoutMemory'
@@ -38,7 +39,13 @@ export async function refineComposition(
   if (!assessment?.preserveContext) return
   const candidates = [...(sceneCuts ?? []), ...transitions.flatMap((range) => [range.start, range.end]),
     ...(clip.visualStory?.protectedRanges ?? []).flatMap(range => [range.start, range.end])]
-  const bounds = [clip.edit.start, ...new Set(candidates.filter((t) => Number.isFinite(t) &&
+  // Only footage that plays is composed. A joined clip's skipped stretch can
+  // hold any number of scene changes; none of them is this clip's business.
+  const stretches = sourceStretches(clip.edit)
+  const joined = stretches.length > 1
+  const played = (t: number): boolean => !joined || stretches.some(r => t >= r.start && t <= r.end)
+  if (joined) candidates.push(...stretches.flatMap(r => [r.start, r.end]))
+  const bounds = [clip.edit.start, ...new Set(candidates.filter((t) => Number.isFinite(t) && played(t) &&
     t > clip.edit.start + 0.04 && t < clip.edit.end - 0.04))].sort((a, b) => a - b)
   bounds.push(clip.edit.end)
   // Very rapid montages keep the safe whole-clip layout rather than an oversized graph.
@@ -52,6 +59,7 @@ export async function refineComposition(
   await mapLimit(shots, 1, async (shot) => {
     signal?.throwIfAborted()
     if (shot.end - shot.start < 0.25) return
+    if (joined && !stretches.some(r => shot.start >= r.start - 0.001 && shot.end <= r.end + 0.001)) return
     if (transitions.some((range) => shot.start < range.end && shot.end > range.start)) return
     let frames: string[] = []
     let retryTimes: number[] = []

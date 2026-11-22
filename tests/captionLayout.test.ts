@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   CAPTION_HOLD_SEC,
   captionLayoutBudget,
+  captionWordText,
   groupDisplayEnd,
   groupWords,
   wordsInRange,
@@ -162,5 +163,56 @@ describe('groupDisplayEnd', () => {
 
   it('never holds past the clip end', () => {
     expect(groupDisplayEnd(groups, 1, 6)).toBe(6)
+  })
+})
+
+describe('captionWordText', () => {
+  const punchy = { wordsPerGroup: 3, uppercase: false }
+  const draw = (text: string): string => captionWordText(text, punchy)
+
+  it('drops trailing commas and full stops on big-word styles', () => {
+    expect(draw('works.')).toBe('works')
+    expect(draw('so,')).toBe('so')
+    expect(draw('end;')).toBe('end')
+    expect(draw('this:')).toBe('this')
+    expect(draw('$5,000.')).toBe('$5,000')
+  })
+
+  it('keeps marks that carry tone', () => {
+    expect(draw('what?')).toBe('what?')
+    expect(draw('no!')).toBe('no!')
+    expect(draw('why?!')).toBe('why?!')
+    expect(draw('wait...')).toBe('wait...')
+    expect(draw('hmm…')).toBe('hmm…')
+  })
+
+  it('leaves punctuation inside a word alone', () => {
+    expect(draw('3.5')).toBe('3.5')
+    expect(draw("don't")).toBe("don't")
+    expect(draw('U.S.')).toBe('U.S.')
+    expect(draw('U.S.,')).toBe('U.S.')
+    expect(draw('e.g.')).toBe('e.g.')
+  })
+
+  it('strips inside closing quotes and brackets', () => {
+    expect(draw('"done."')).toBe('"done"')
+    expect(draw('(yes).')).toBe('(yes)')
+    expect(draw("goin',")).toBe("goin'")
+  })
+
+  it('never empties a word that is only punctuation', () => {
+    expect(draw('.')).toBe('.')
+    expect(draw('—')).toBe('—')
+  })
+
+  it('keeps punctuation on subtitle-like styles and applies the style case', () => {
+    expect(captionWordText('works.', { wordsPerGroup: 6, uppercase: false })).toBe('works.')
+    expect(captionWordText('works.', { wordsPerGroup: 6, uppercase: true })).toBe('WORKS.')
+    expect(captionWordText('works.', { wordsPerGroup: 3, uppercase: true })).toBe('WORKS')
+  })
+
+  it('agrees with every bundled style about which kind it is', () => {
+    expect(captionWordText('so,', getCaptionStyle('beast'))).toBe('SO')
+    expect(captionWordText('so,', getCaptionStyle('minimal'))).toBe('so,')
   })
 })

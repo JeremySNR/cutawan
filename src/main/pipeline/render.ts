@@ -14,7 +14,9 @@ import type {
   WatermarkPosition
 } from '@shared/types'
 import type { EncoderPreference } from '@shared/types'
-import { clipKeptSegments, remapTranscript, TimeMap, type KeptSegment } from '@shared/tighten'
+import { clipKeptSegments, editedClipDuration, remapTranscript, TimeMap, type KeptSegment } from '@shared/tighten'
+import { SEPARATE_STRETCH_GAP_SEC, limitStretches, sourceStretches } from '@shared/clipSegments'
+import type { TimeRange } from '@shared/types'
 import { focusPanDuration, focusSnaps } from '@shared/focusTrack'
 import { automaticLayoutShots, clipAllowsAutoZoom, compositionHidesTitle, detailCaptionRanges, layoutBlocksAutoZoom } from '@shared/contentType'
 import { compositionGraph, fitRegionGraph } from './layoutFilters'
@@ -23,7 +25,7 @@ import { computeZoomEvents, fitZoomEvents, remapZoomEvents, type ZoomEvent } fro
 import { planUploadEncode, type UploadEncodePlan } from '@shared/uploadBudget'
 import { FFMPEG_PATH, probeVideo, runFfmpegWith } from './ffmpeg'
 import { timed } from './timing'
-import { loudnormFilter, measureLoudness, normalisationMode, type LoudnessStats } from './loudness'
+import { loudnormFilter, measureLoudness, measureLoudnessOfRanges, normalisationMode, type LoudnessStats } from './loudness'
 import { buildAss, fontsDir } from './captions'
 import { fontMetricsForFamily } from '../fonts'
 import { mediaJobs } from './mediaJobs'
@@ -36,10 +38,54 @@ import {
 } from './encoders'
 
 /**
+ * Put every kept segment's edges on the source's frame grid, so each piece's
+ * video and audio are exactly the same length.
+ *
+ * `trim` keeps whole frames (those whose timestamp falls inside the range)
+ * while `atrim` cuts at the exact sample, so a cut between two frames left
+ * each piece's video up to a frame longer or shorter than its audio. Concat
+ * joins the pieces end to end, so the offset between picture and sound
+ * wanders by up to a frame at every cut (the errors partly cancel by the
+ * end, which is why the total length looked right). Edges go a quarter frame
+ * before a frame's timestamp, so which frames a piece holds is never left to
+ * floating-point rounding, and every piece is a whole number of frames long
+ * for both streams. The audio then leads its frames by at most a quarter
+ * frame, constantly rather than cumulatively. Pieces that vanish are
+ * dropped; the first edge never moves before the trim, the last never past
+ * it. Exported for tests.
+ */
+export function alignSegmentsToFrames(
+  segments: KeptSegment[] | null,
+  fps: number,
+  trimStart: number,
+  trimEnd: number
+): KeptSegment[] | null {
+  if (!segments || !(fps > 1 && fps < 240)) return segments
+  const edge = (t: number): number => (Math.round(t * fps) - 0.25) / fps
+  const out: KeptSegment[] = []
+  for (const segment of segments) {
+    const start = Math.max(trimStart, edge(segment.start))
+    const end = Math.min(trimEnd, edge(segment.end))
+    if (end - start < 0.5 / fps) continue
+    const last = out[out.length - 1]
+    // Two pieces that now meet are one piece.
+    if (last && start <= last.end + 1e-9) last.end = Math.max(last.end, end)
+    else out.push({ start, end })
+  }
+  return out
+}
+
+/**
  * Gentle audio fade at the clip tail so endings never cut off abruptly —
  * short enough to stay inside the post-roll padding after the last word.
  */
 const END_FADE_SEC = 0.4
+
+/**
+ * Most times one export opens the source. Past this the shortest gaps are
+ * decoded through instead: every input is its own decoder.
+ */
+const MAX_SOURCE_INPUTS = 6
 
 /**
  * Longest filter graph still passed as a command-line argument. Anything
@@ -312,21 +358,68 @@ function reframeGraph(
 }
 
 /**
+ * Fade applied to the audio either side of every internal cut. Two pieces
+ * butted together jump from one waveform to another mid-cycle: a click on
+ * room tone or music, and a step in level wherever a filler word came out.
+ * 15 ms of raised-cosine fade (a 720-sample ramp at 48 kHz) takes the jump
+ * to zero without being heard as a dip — the out-and-in pair is 30 ms,
+ * under the ~50 ms at which a break in sound starts to read as a pause —
+ * and stays inside the breathing room pause removal leaves around speech.
+ * The fades sit inside each piece, so no duration changes: captions, zoom
+ * and focus are timed against the exact sum of the kept segments.
+ */
+export const CUT_FADE_SEC = 0.015
+/** A short piece is faded over at most this share of its length at each end. */
+const CUT_FADE_MAX_SHARE = 0.25
+
+/**
+ * The per-piece audio fade filters for the piece `i` of `segments`, lasting
+ * `duration` seconds once trimmed: a fade in where it follows a cut and a
+ * fade out where one follows it. Never at the clip's own start or end (the
+ * end has its own fade, see audioChain), and never between pieces that touch
+ * in the source. Exported for tests.
+ */
+export function cutFades(segments: KeptSegment[], i: number, duration: number): string {
+  const fade = Math.min(CUT_FADE_SEC, duration * CUT_FADE_MAX_SHARE)
+  if (fade < 0.001) return ''
+  const d = fade.toFixed(4)
+  const filters: string[] = []
+  const previous = segments[i - 1], next = segments[i + 1]
+  if (previous && segments[i].start - previous.end > 0.001) filters.push(`afade=t=in:d=${d}:curve=hsin`)
+  if (next && next.start - segments[i].end > 0.001) {
+    filters.push(`afade=t=out:st=${Math.max(0, duration - fade).toFixed(4)}:d=${d}:curve=hsin`)
+  }
+  return filters.map((f) => `,${f}`).join('')
+}
+
+/**
  * Trim+concat prefix for tightened clips: cuts the kept segments out of the
  * (already -ss seeked, so clip-relative) input and concatenates them.
- * Produces [vcat] and, when audio is present, [acat].
+ * Produces [vcat] and, when audio is present, [acat]. Each audio piece is
+ * faded in and out at the cuts (cutFades), never across them.
+ *
+ * A clip joined from distant moments is opened once per moment (`sources`,
+ * one input each, in order), so the minutes between them are never decoded;
+ * each segment is then cut from the input that holds it.
  */
-function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: boolean): string {
+function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: boolean, sources?: TimeRange[]): string {
   const parts: string[] = []
   const vLabels: string[] = []
   const aLabels: string[] = []
   segments.forEach((seg, i) => {
-    const s = Math.max(0, seg.start - clipStart).toFixed(3)
-    const e = Math.max(0, seg.end - clipStart).toFixed(3)
-    parts.push(`[0:v]trim=start=${s}:end=${e},setpts=PTS-STARTPTS[vs${i}]`)
+    // By midpoint: frame alignment can move a piece's edge a fraction of a
+    // frame outside its stretch, and an edge lookup would then pick the wrong
+    // input and cut the wrong footage.
+    const middle = (seg.start + seg.end) / 2
+    const input = sources ? Math.max(0, sources.findIndex((r) => middle >= r.start && middle <= r.end)) : 0
+    const origin = sources ? sources[input].start : clipStart
+    const s = Math.max(0, seg.start - origin).toFixed(3)
+    const e = Math.max(0, seg.end - origin).toFixed(3)
+    parts.push(`[${input}:v]trim=start=${s}:end=${e},setpts=PTS-STARTPTS[vs${i}]`)
     vLabels.push(`[vs${i}]`)
     if (hasAudio) {
-      parts.push(`[0:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS[as${i}]`)
+      const fades = cutFades(segments, i, Number(e) - Number(s))
+      parts.push(`[${input}:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS${fades}[as${i}]`)
       aLabels.push(`[as${i}]`)
     }
   })
@@ -438,7 +531,15 @@ export function buildFilterGraph(
   source: VideoInfo,
   assPath: string | null,
   clipDuration: number,
-  tighten: { segments: KeptSegment[]; clipStart: number } | null,
+  tighten: {
+    segments: KeptSegment[]
+    clipStart: number
+    /**
+     * The stretches of source opened as separate inputs, in order, when the
+     * clip joins distant moments. Absent means one input from `clipStart`.
+     */
+    sources?: TimeRange[]
+  } | null,
   options?: {
     branding?: BrandingSettings | null
     fontsDirPath?: string
@@ -460,6 +561,8 @@ export function buildFilterGraph(
   const { w, h } = targetDims(clip.edit.aspect, source)
   const parts: string[] = []
   const extraInputs: string[] = []
+  /** Image inputs (B-roll, watermark) come after the source input or inputs. */
+  const sourceInputs = tighten?.sources?.length ?? 1
 
   const items = clip.broll.filter(
     (b) =>
@@ -484,7 +587,7 @@ export function buildFilterGraph(
 
   let audioLabel: string | null = null
   if (tighten) {
-    parts.push(tightenGraph(tighten.segments, tighten.clipStart, source.hasAudio))
+    parts.push(tightenGraph(tighten.segments, tighten.clipStart, source.hasAudio, tighten.sources))
     parts.push(reframeGraph(clip, source, 'vcat', focus, focusCommandsPath))
     if (source.hasAudio) {
       parts.push(`[acat]${audioChain(clipDuration, options?.loudness ?? null, options?.audioTailSec)}[aout]`)
@@ -506,7 +609,7 @@ export function buildFilterGraph(
   }
 
   items.forEach((item, i) => {
-    const input = i + 1
+    const input = i + sourceInputs
     const s = Math.max(0, item.start - clip.edit.start)
     const e = Math.min(clipDuration, item.end - clip.edit.start)
     extraInputs.push('-loop', '1', '-t', clipDuration.toFixed(3), '-i', item.imagePath!)
@@ -538,7 +641,7 @@ export function buildFilterGraph(
 
   const branding = options?.branding
   if (branding?.enabled && branding.imagePath) {
-    const input = items.length + 1
+    const input = items.length + sourceInputs
     extraInputs.push('-loop', '1', '-t', clipDuration.toFixed(3), '-i', branding.imagePath)
     const wmWidth = Math.max(2, Math.round(w * Math.min(0.5, Math.max(0.04, branding.scale))))
     const opacity = Math.min(1, Math.max(0.05, branding.opacity))
@@ -609,7 +712,9 @@ export function renderClip(job: RenderJob): Promise<RenderResult> {
       // Preserve any previous export until the new file passes a complete decode.
       await timed('export/validate', () => runFfmpegWith(FFMPEG_PATH, ['-v', 'error', '-xerror', '-i', temporary,
         '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-'], { signal: job.signal,
-        onProgress: seconds => job.onProgress?.(.95 + .05 * Math.min(1, seconds / Math.max(.1, job.clip.edit.end - job.clip.edit.start))) }))
+        // Against what plays, not the trim span: a joined clip's trim includes
+        // the minutes it skips, which left the bar stuck at 95%.
+        onProgress: seconds => job.onProgress?.(.95 + .05 * Math.min(1, seconds / Math.max(.1, editedClipDuration(job.clip, job.transcript)))) }))
       job.signal?.throwIfAborted()
       await rename(temporary, job.outputPath)
       job.onProgress?.(1)
@@ -633,12 +738,21 @@ async function render(job: RenderJob): Promise<RenderResult> {
   // Tighten cuts: figure out the kept segments and remap everything that is
   // timed against the source (captions, B-roll, face track) into the
   // compacted output timeline.
-  const segments = clipKeptSegments(clip, transcript)
+  const segments = alignSegmentsToFrames(clipKeptSegments(clip, transcript), source.fps, start, clip.edit.end)
   if (segments && segments.length === 0) {
     throw new Error('Nothing is left to export: every part of this clip has been cut. Undo a cut or widen the trim.')
   }
   const map = segments ? new TimeMap(segments) : null
   const outputDuration = map ? map.outputDuration : duration
+  // Moments far apart are each opened with their own seek. One input reading
+  // from the first to the last would decode everything between them too.
+  const stretches = segments ? limitStretches(sourceStretches(clip.edit), MAX_SOURCE_INPUTS) : []
+  // A single stretch well inside the trim (a long cut at its start or end)
+  // also gets its own seek, so the cut footage is neither decoded nor
+  // measured for loudness.
+  const inset = stretches.length === 1 &&
+    (stretches[0].start - start > SEPARATE_STRETCH_GAP_SEC || clip.edit.end - stretches[0].end > SEPARATE_STRETCH_GAP_SEC)
+  const sources = stretches.length > 1 || inset ? stretches : null
 
   let effectiveClip = clip
   let captionTranscript = transcript
@@ -715,7 +829,9 @@ async function render(job: RenderJob): Promise<RenderResult> {
   // integrated loudness gates out silence anyway, so removing pauses changes
   // the reading by a fraction of a dB — not worth a second trim+concat graph.
   const loudness = source.hasAudio
-    ? await timed('export/loudness', () => measureLoudness(source.path, start, duration, job.signal))
+    ? await timed('export/loudness', () => sources
+        ? measureLoudnessOfRanges(source.path, sources, job.signal)
+        : measureLoudness(source.path, start, duration, job.signal))
     : null
   if (process.env.CUTAWAN_DEBUG) {
     console.error(`[render] loudness normalisation: ${normalisationMode(loudness)}`, loudness)
@@ -731,7 +847,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
     source,
     assPath,
     outputDuration,
-    segments ? { segments, clipStart: start } : null,
+    segments ? { segments, clipStart: start, ...(sources ? { sources } : {}) } : null,
     {
       branding: job.branding,
       fontsDirPath: job.fontsDirPath,
@@ -800,9 +916,11 @@ async function render(job: RenderJob): Promise<RenderResult> {
     audioCodec: string[]
     output: string[]
   }): string[] => [
-    '-ss', start.toFixed(3),
-    '-t', duration.toFixed(3),
-    '-i', source.path,
+    ...(sources ?? [{ start, end: start + duration }]).flatMap((range) => [
+      '-ss', range.start.toFixed(3),
+      '-t', (range.end - range.start).toFixed(3),
+      '-i', source.path
+    ]),
     ...graph.extraInputs,
     ...filterArgs,
     '-map', `[${videoLabel}]`,

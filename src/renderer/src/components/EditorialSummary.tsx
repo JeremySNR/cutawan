@@ -1,6 +1,7 @@
 import type { Clip } from '@shared/types'
 import { EDITORIAL_DIMENSIONS, type EditorialDimension, type EditorialRankingReport } from '@shared/editorialRanking'
 import ScoreBadge from './ScoreBadge'
+import { ScoreBars, ScoreGrades } from './ScoreBreakdown'
 import { formatTimecode } from '../lib/format'
 
 const DIMENSION_LABELS: Record<EditorialDimension, string> = {
@@ -12,7 +13,7 @@ export function EditorialScore({ clip, current, size = 'sm' }: {
   current: boolean
   size?: 'sm' | 'lg'
 }): React.JSX.Element {
-  if (!clip.editorial) return <ScoreBadge score={clip.viralityScore} size={size} />
+  if (!clip.editorial) return <ScoreBadge score={clip.viralityScore} kind={clip.scoreBreakdown ? 'score' : 'legacy'} size={size} />
   if (current && clip.editorial.status === 'reviewed' && clip.editorial.score !== null) {
     return <ScoreBadge score={clip.editorial.score} kind="editorial" size={size} />
   }
@@ -27,6 +28,21 @@ export function EditorialExplanation({ clip, current, compact = false }: {
   compact?: boolean
 }): React.JSX.Element {
   const assessment = clip.editorial
+  if (!assessment && clip.scoreBreakdown) {
+    if (compact) {
+      return <div className="mt-2 text-xs leading-relaxed">
+        <p className="line-clamp-2 text-zinc-400" title={clip.viralityReason}>{clip.viralityReason}</p>
+        <ScoreGrades parts={clip.scoreBreakdown} />
+      </div>
+    }
+    return <div className="rounded-xl border border-surface-700 bg-surface-850 px-3.5 py-3 text-xs leading-relaxed text-zinc-400">
+      <p className="font-semibold text-zinc-200">Why this clip</p>
+      {clip.viralityReason && <p className="mt-1">{clip.viralityReason}</p>}
+      <ScoreBars parts={clip.scoreBreakdown} />
+      {clip.visualSummary && <p className="mt-3"><span className="font-medium text-zinc-300">Source visuals: </span>{clip.visualSummary}</p>}
+      <p className="mt-2 text-zinc-500">An AI estimate of editorial quality from the transcript and sampled frames, not a prediction of views.</p>
+    </div>
+  }
   if (!assessment) {
     return <p className={`${compact ? 'mt-2 line-clamp-2' : 'rounded-xl border border-surface-700 bg-surface-850 px-3.5 py-3'} text-xs leading-relaxed text-zinc-400`}>
       <span className="font-medium text-zinc-300">Earlier AI assessment: </span>

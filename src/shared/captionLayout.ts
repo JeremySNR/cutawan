@@ -98,6 +98,34 @@ export function captionLayoutBudget(style: CaptionStyle, aspectRatio: number): C
   }
 }
 
+/**
+ * Styles that show a few big words at a time drop the commas and full stops
+ * a transcript carries: on a three-word card they are clutter ("WORKS." /
+ * "SO,"), and the card break already marks the pause. Styles that read as
+ * subtitles — a whole phrase per card — keep their punctuation.
+ */
+export function stripsCaptionPunctuation(style: Pick<CaptionStyle, 'wordsPerGroup'>): boolean {
+  return style.wordsPerGroup <= 4
+}
+
+/**
+ * A transcript word as a caption draws it, shared by the preview and the
+ * burned-in ASS. Question and exclamation marks stay (they carry tone), as
+ * does an ellipsis, and so does the final dot of an abbreviation ("U.S.") or
+ * a word that is nothing but punctuation.
+ */
+export function captionWordText(text: string, style: Pick<CaptionStyle, 'wordsPerGroup' | 'uppercase'>): string {
+  const cased = (value: string): string => (style.uppercase ? value.toUpperCase() : value)
+  if (!stripsCaptionPunctuation(style)) return cased(text)
+  // Closing quotes and brackets sit outside the punctuation: "done." -> "done"
+  const [, body = text, closers = ''] = text.match(/^(.*?)(["'”’)\]]*)$/) ?? []
+  let core = body
+  if (/(…|\.{2,})$/.test(core)) return cased(text)
+  if (/\p{L}\.\p{L}/u.test(core)) core = core.replace(/[,;:]+$/, '')
+  else core = core.replace(/[.,;:]+$/, '')
+  return /[\p{L}\p{N}]/u.test(core) ? cased(core + closers) : cased(text)
+}
+
 /** Estimated rendered width of a word, in em. */
 function wordWidthEm(text: string, glyphWidthEm: number): number {
   return text.length * glyphWidthEm

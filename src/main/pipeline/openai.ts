@@ -2,7 +2,7 @@ import { usesSubscription, usesLocalTranscription, subscriptionJSON, transcribeL
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { analysisRequests } from './mediaJobs'
+import { apiRequests } from './mediaJobs'
 import { OPENROUTER_API_BASE } from '@shared/openrouter'
 
 /**
@@ -343,6 +343,51 @@ export function transcriptionChunkSec(defaultSec: number): number {
   return openRouter && !usesLocalTranscription() ? OPENROUTER_AUDIO_CHUNK_SEC : defaultSec
 }
 
+export interface TranscriptionPlan {
+  /** Audio chunks transcribed at once. */
+  concurrency: number
+  /**
+   * What each chunk is primed with: the text just before it (`previous`,
+   * which forces one chunk at a time), the opening chunk's text as a spelling
+   * guide for all the others (`first`), or nothing.
+   */
+  context: 'previous' | 'first' | 'none'
+}
+
+/** Hosts where a second simultaneous request competes for the same machine. */
+function isLocalHost(base: string): boolean {
+  try {
+    const host = new URL(base).hostname.replace(/^\[|\]$/g, '')
+    return host === 'localhost' || host === '::1' || host === '0.0.0.0' || host.endsWith('.local') ||
+      host.endsWith('.internal') || host.endsWith('.lan') || host.endsWith('.home.arpa') ||
+      /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) ||
+      // IPv6 unique-local (fc00::/7) and link-local (fe80::/10) addresses.
+      /^(f[cd][0-9a-f]{0,2}|fe[89ab][0-9a-f]?):/i.test(host)
+  } catch {
+    return true
+  }
+}
+
+/**
+ * How the active route transcribes a long video's chunks.
+ *
+ * A hosted API takes several chunks at once, which is most of the wait on a
+ * long video: an hour is three twenty-minute requests end to end otherwise.
+ * The price is that a chunk can no longer be primed with the text right
+ * before it, so the opening chunk goes first and its text primes the rest —
+ * Whisper uses a prompt for spelling and style, and the names it needs
+ * (guests, products) are overwhelmingly introduced at the start. On-device
+ * Whisper and a Whisper server on this machine or network stay one at a time:
+ * a second request there only splits the same CPU or GPU.
+ */
+export function transcriptionPlan(): TranscriptionPlan {
+  if (usesLocalTranscription()) return { concurrency: 1, context: 'previous' }
+  if (openRouter) return { concurrency: HOSTED_TRANSCRIPTION_CONCURRENCY, context: 'none' }
+  if (isLocalHost(transcriptionApiBase())) return { concurrency: 1, context: 'previous' }
+  return { concurrency: HOSTED_TRANSCRIPTION_CONCURRENCY, context: 'first' }
+}
+const HOSTED_TRANSCRIPTION_CONCURRENCY = 3
+
 export type ChatContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } }
@@ -363,7 +408,7 @@ export async function chatJSON<T>(
   if (usesSubscription()) return subscriptionJSON<T>(messages, schema, signal)
   return withRetries(
     async () => {
-      const content = await analysisRequests.run(() => completeChatContent(
+      const content = await apiRequests.run(() => completeChatContent(
         apiKey,
         model,
         messages,

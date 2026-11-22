@@ -1,5 +1,6 @@
 import type { Transcript, TranscriptSegment, TranscriptWord } from '@shared/types'
-import { transcribeAudioFile, type WhisperResponse, type WhisperSegment } from './openai'
+import { transcribeAudioFile, type TranscriptionPlan, type WhisperResponse, type WhisperSegment } from './openai'
+import { mapLimit } from './concurrency'
 import type { AudioChunk } from './ffmpeg'
 import { runFfmpeg } from './ffmpeg'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -182,10 +183,22 @@ export function trustedChunkText(res: WhisperResponse, beforeSec = Infinity): st
     .join(' ')
 }
 
+/** Text of chunk `index` up to where the next chunk's audio begins. */
+function tailBeforeNext(chunks: AudioChunk[], index: number, res: WhisperResponse): string {
+  const next = chunks[index + 1]
+  // The prompt describes preceding audio, never the overlapping opening of
+  // the next file: that text has not yet been decoded by the next request.
+  return trustedChunkText(res, next ? next.offsetSec - chunks[index].offsetSec : Infinity).slice(-600)
+}
+
 /**
- * Transcribe all audio chunks (sequentially: the tail of each chunk's text is
- * preceding the next file is passed as a Whisper prompt for terminology).
- * Stitch the results, then check sustained overlap disagreements against audio.
+ * Transcribe all audio chunks, stitch the results, then check sustained
+ * overlap disagreements against audio.
+ *
+ * By default chunks go one at a time, each primed with the text just before
+ * it. A `plan` with more concurrency sends several at once (see
+ * `transcriptionPlan`); the stitching and join repair are the same either
+ * way, since every chunk is decoded independently in both.
  */
 export async function transcribeChunks(
   apiKey: string,
@@ -193,25 +206,51 @@ export async function transcribeChunks(
   chunks: AudioChunk[],
   language: string,
   onProgress?: (fraction: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  plan: TranscriptionPlan = { concurrency: 1, context: 'previous' }
 ): Promise<Transcript> {
-  const results: ChunkResult[] = []
-  let previousTail = ''
-
-  for (let i = 0; i < chunks.length; i++) {
-    signal?.throwIfAborted()
-    const chunk = chunks[i]
-    const res = await transcribeAudioFile(apiKey, chunk.path, model, {
-      contextPrompt: previousTail || undefined,
+  const results: ChunkResult[] = new Array(chunks.length)
+  let finished = 0
+  const transcribe = async (i: number, contextPrompt: string, requestSignal?: AbortSignal): Promise<WhisperResponse> => {
+    requestSignal?.throwIfAborted()
+    const res = await transcribeAudioFile(apiKey, chunks[i].path, model, {
+      contextPrompt: contextPrompt || undefined,
       language,
-      signal
+      signal: requestSignal
     })
-    // The prompt describes preceding audio, never the overlapping opening of
-    // the next file: that text has not yet been decoded by the next request.
-    const next = chunks[i + 1]
-    previousTail = trustedChunkText(res, next ? next.offsetSec - chunk.offsetSec : Infinity).slice(-600)
-    results.push({ chunk, res })
-    onProgress?.(((i + 1) / chunks.length) * (chunks.length > 1 ? 0.9 : 1))
+    results[i] = { chunk: chunks[i], res }
+    finished++
+    onProgress?.((finished / chunks.length) * (chunks.length > 1 ? 0.9 : 1))
+    return res
+  }
+
+  if (plan.concurrency <= 1 || plan.context === 'previous') {
+    let previousTail = ''
+    for (let i = 0; i < chunks.length; i++) {
+      previousTail = tailBeforeNext(chunks, i, await transcribe(i, previousTail, signal))
+    }
+  } else {
+    // A failed chunk stops the others: every request still running is billed.
+    const group = new AbortController()
+    const groupSignal = signal ? AbortSignal.any([signal, group.signal]) : group.signal
+    let guide = ''
+    let rest = chunks.map((_, i) => i)
+    if (plan.context === 'first' && chunks.length > 0) {
+      // The opening, not the end, of the first chunk: hosts introduce the
+      // guest and the names Whisper needs to spell at the start.
+      const first = await transcribe(0, '', signal)
+      guide = trustedChunkText(first, chunks[1] ? chunks[1].offsetSec - chunks[0].offsetSec : Infinity).slice(0, 600)
+      rest = rest.slice(1)
+    }
+    await mapLimit(rest, plan.concurrency, async (i) => {
+      try {
+        await transcribe(i, guide, groupSignal)
+      } catch (error) {
+        group.abort()
+        throw error
+      }
+    })
+    signal?.throwIfAborted()
   }
 
   let transcript = stitchChunkResults(results)

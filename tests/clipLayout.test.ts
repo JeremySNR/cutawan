@@ -1,11 +1,12 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { Clip } from '@shared/types'
 import { needsReframe } from '@shared/reframe'
-const mocks = vi.hoisted(() => ({ faces: vi.fn(), apply: vi.fn(), compose: vi.fn(), assess: vi.fn(), cuts: vi.fn() }))
+const mocks = vi.hoisted(() => ({ faces: vi.fn(), apply: vi.fn(), compose: vi.fn(), assess: vi.fn(), cuts: vi.fn(), gaps: vi.fn() }))
 vi.mock('../src/main/pipeline/faces', () => ({ analyzeClipFocus: mocks.faces, applyFocusAnalysis: mocks.apply }))
 vi.mock('../src/main/pipeline/composition', () => ({ refineComposition: mocks.compose }))
 vi.mock('../src/main/pipeline/screenCuts', () => ({ screenTransitions: mocks.cuts }))
 vi.mock('../src/main/pipeline/visualScore', () => ({ assessClipVisuals: mocks.assess }))
+vi.mock('../src/main/pipeline/gapActivity', () => ({ refreshGapActivity: mocks.gaps }))
 import { analyzeClipLayout } from '../src/main/pipeline/clipLayout'
 
 const clip = (kind?: 'screen' | 'camera' | 'mixed'): Clip => ({ id: 'clip',
@@ -74,4 +75,20 @@ it('migrates old automatic letterboxes once while retaining manual corrections',
   c.visualLayout!.revision = 0
   c.reframeAnalysis.version = 2
   expect(needsReframe(c)).toBe(false)
+})
+it('measures pause activity on every route, with or without a key, before composition', async () => {
+  const transcript = { language: 'en', durationSec: 50, segments: [] }
+  const order: string[] = []
+  mocks.gaps.mockImplementation(async () => { order.push('gaps') })
+  mocks.compose.mockImplementation(async () => { order.push('compose') })
+  // Screen route: face analysis skipped.
+  const screen = clip('screen')
+  await analyzeClipLayout('video.mp4', screen, 'auto', 'key', 'model', transcript)
+  expect(mocks.faces).not.toHaveBeenCalled()
+  expect(mocks.gaps).toHaveBeenLastCalledWith('video.mp4', screen, transcript, undefined)
+  expect(order).toEqual(['gaps', 'compose'])
+  // Camera route without an API key, and a talking head.
+  await analyzeClipLayout('video.mp4', clip('camera'), 'auto', '', 'model', transcript)
+  await analyzeClipLayout('video.mp4', clip('camera'), 'talking-head', '', 'model', transcript)
+  expect(mocks.gaps).toHaveBeenCalledTimes(3)
 })

@@ -64,7 +64,10 @@ export interface EditorialRankingReport {
 /** Compare the actual source selection, including removed words and caption corrections.
  * Layout/title changes do not change this source assessment; rendered layout remains separate. */
 export function editorialSelectionKey(clip: Clip, transcript: Transcript | null): string {
-  const ranges = clipKeptSegments(clip, transcript) ?? [{ start: clip.edit.start, end: clip.edit.end }]
+  // Without the pauses kept for on-screen activity: those are measured by
+  // framing analysis after the assessment was recorded, so including them
+  // marked every assessed clip as edited when nobody had touched it.
+  const ranges = clipKeptSegments({ ...clip, gapActivity: undefined }, transcript) ?? [{ start: clip.edit.start, end: clip.edit.end }]
   const words = transcript?.segments.flatMap(s => s.words).filter(w => ranges.some(r =>
     (w.start + w.end) / 2 >= r.start && (w.start + w.end) / 2 <= r.end)) ?? []
   return JSON.stringify({ ranges, words: words.map(w => [w.start, w.end, w.sourceText ?? w.text, w.text]) })

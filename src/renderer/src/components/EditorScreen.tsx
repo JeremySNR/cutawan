@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Captions,
   CaseUpper,
@@ -17,7 +17,9 @@ import {
   Trash2,
   Type
 } from 'lucide-react'
-import type { TimelineData } from '@shared/types'
+import type { TimelineData, TimeRange } from '@shared/types'
+import { buildTimelineScale, timelineFolds } from '@shared/timelineScale'
+import { JoinedMomentsNote } from './JoinedMoments'
 import { isWholeVideoClip } from '@shared/wholeVideo'
 import { needsReframe, userClipEdit } from '@shared/reframe'
 import { automaticLayoutShots, validLayoutShots } from '@shared/contentType'
@@ -73,26 +75,40 @@ export default function EditorScreen(): React.JSX.Element {
       ? Math.min(project.video.durationSec, clip.suggestedEnd + 15)
       : 0
 
-  // Filmstrip + waveform for the trim window (cached in the main process).
-  // Keyed so a stale window's data never renders for the current clip.
-  const timelineKey = `${videoPath}|${windowStart.toFixed(2)}|${windowEnd.toFixed(2)}`
-  const [loadedTimeline, setLoadedTimeline] = useState<{ key: string; data: TimelineData } | null>(
-    null
+  // A long cut (a clip joined from distant moments) is folded on the
+  // timeline. The fold is held where it was for the length of a drag, so the
+  // bar does not rearrange itself under the pointer as an edge moves.
+  const [heldFolds, setHeldFolds] = useState<TimeRange[] | null>(null)
+  const liveFolds = useMemo(
+    () => (clip ? timelineFolds(clip.edit, windowStart, windowEnd) : []),
+    [clip, windowStart, windowEnd]
   )
+  const folds = heldFolds ?? liveFolds
+  const scale = useMemo(() => buildTimelineScale(windowStart, windowEnd, folds), [windowStart, windowEnd, folds])
+
+  // Filmstrip + waveform for each pane of the trim window (cached in the main
+  // process). Keyed so a stale window's data never renders for the current clip.
+  const paneKeys = scale.panes.map((pane) => `${videoPath}|${pane.start.toFixed(2)}|${pane.end.toFixed(2)}`)
+  const timelineKey = paneKeys.join('\n')
+  const [loadedTimelines, setLoadedTimelines] = useState<Record<string, TimelineData>>({})
   useEffect(() => {
     if (!videoPath || sourceMissing) return
     let alive = true
-    window.cutawan
-      .getTimeline(videoPath, windowStart, windowEnd)
-      .then((data) => {
-        if (alive) setLoadedTimeline({ key: timelineKey, data })
-      })
-      .catch(() => undefined) // timeline is progressive enhancement
+    for (const key of timelineKey.split('\n')) {
+      // The last two fields: a file path can itself contain "|".
+      const [from, to] = key.split('|').slice(-2)
+      window.cutawan
+        .getTimeline(videoPath, Number(from), Number(to))
+        .then((data) => {
+          if (alive) setLoadedTimelines((loaded) => ({ ...loaded, [key]: data }))
+        })
+        .catch(() => undefined) // timeline is progressive enhancement
+    }
     return () => {
       alive = false
     }
-  }, [videoPath, sourceMissing, windowStart, windowEnd, timelineKey])
-  const timeline = loadedTimeline?.key === timelineKey ? loadedTimeline.data : null
+  }, [videoPath, sourceMissing, timelineKey])
+  const timelines = paneKeys.map((key) => loadedTimelines[key] ?? null)
 
   // Clips outside the pipeline's top tier arrive without speaker framing;
   // opening one is what triggers the analysis (see shared/reframe.ts).
@@ -174,14 +190,15 @@ export default function EditorScreen(): React.JSX.Element {
         </div>
 
         {!wholeVideo && <EditorialExplanation clip={clip} current={assessmentCurrent} />}
+        {!wholeVideo && <JoinedMomentsNote clip={clip} />}
 
         <Section icon={Scissors} title="Trim">
           <TimelineEditor
             clip={clip}
-            windowStart={windowStart}
-            windowEnd={windowEnd}
+            scale={scale}
+            timelines={timelines}
             fps={project.video.fps || 30}
-            timeline={timeline}
+            onDragState={(dragging) => setHeldFolds(dragging ? liveFolds : null)}
             // Timeline edits never touch layout fields, so they save as-is
             // (userClipEdit would mark the layout as manually chosen).
             onLocal={(edit) => updateClipLocal({ ...clip, edit })}

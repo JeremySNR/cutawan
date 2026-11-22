@@ -6,7 +6,8 @@ import {
   configureOpenAiEndpoints,
   extractJsonText,
   resolveOpenAiApiBase,
-  transcriptionApiBase
+  transcriptionApiBase,
+  transcriptionPlan
 } from '../src/main/pipeline/openai'
 
 describe('resolveOpenAiApiBase', () => {
@@ -173,13 +174,43 @@ describe('chatJSON', () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }))
     })
     vi.stubGlobal('fetch', fetchMock)
-    const running = Array.from({ length: 4 }, () => chatJSON('key', 'model', [], 'test', schema))
+    const running = Array.from({ length: 6 }, () => chatJSON('key', 'model', [], 'test', schema))
     const controller = new AbortController()
     const cancelled = chatJSON('key', 'model', [], 'test', schema, controller.signal)
     controller.abort()
     await expect(cancelled).rejects.toThrow()
     await Promise.all(running)
-    expect(fetchMock).toHaveBeenCalledTimes(4)
-    expect(peak).toBeLessThanOrEqual(2)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(peak).toBe(4)
+  })
+})
+
+describe('transcriptionPlan', () => {
+  afterEach(() => {
+    configureOpenAiEndpoints({})
+    vi.unstubAllEnvs()
+  })
+
+  it('sends several chunks at once to a hosted API, primed from the opening chunk', () => {
+    vi.stubEnv('OPENAI_BASE_URL', '')
+    vi.stubEnv('OPENAI_TRANSCRIPTION_BASE_URL', '')
+    configureOpenAiEndpoints({})
+    expect(transcriptionPlan()).toEqual({ concurrency: 3, context: 'first' })
+    configureOpenAiEndpoints({ chatBase: 'https://api.groq.com/openai/v1' })
+    expect(transcriptionPlan()).toEqual({ concurrency: 3, context: 'first' })
+  })
+
+  it('sends OpenRouter chunks at once with no prompt, which it does not accept', () => {
+    configureOpenAiEndpoints({ openRouter: true })
+    expect(transcriptionPlan()).toEqual({ concurrency: 3, context: 'none' })
+  })
+
+  it('keeps a Whisper server on this machine or network to one request at a time', () => {
+    vi.stubEnv('OPENAI_BASE_URL', '')
+    vi.stubEnv('OPENAI_TRANSCRIPTION_BASE_URL', '')
+    for (const base of ['http://localhost:8000/v1', 'http://127.0.0.1:9000/v1', 'http://192.168.1.20:8000/v1', 'http://[::1]:8000/v1', 'http://whisper.local/v1']) {
+      configureOpenAiEndpoints({ chatBase: 'https://api.openai.com/v1', transcriptionBase: base })
+      expect(transcriptionPlan(), base).toEqual({ concurrency: 1, context: 'previous' })
+    }
   })
 })

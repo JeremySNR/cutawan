@@ -118,6 +118,12 @@ export interface ClipEditState {
   cuts?: TimeRange[]
   /** Source ranges automatic pause removal took out that the user put back. */
   restored?: TimeRange[]
+  /**
+   * Pauses kept automatically because something happens in them (see
+   * `Clip.gapActivity`) that the user chose to remove anyway. Any active
+   * range overlapping one of these is not protected.
+   */
+  removedActive?: TimeRange[]
   /** Razor points (source seconds) dividing the timeline into selectable pieces. */
   splits?: number[]
   /** Explicit framing choice, even when its values match generated defaults. */
@@ -161,6 +167,17 @@ export interface BrollItem {
   enabled: boolean
 }
 
+/** Per-part scores from the clip-selection rubric, each on its own scale. */
+export interface ScoreBreakdown {
+  hook: number
+  emotion: number
+  value: number
+  structure: number
+  shareability: number
+  /** Visual review score (0-99) blended into the final score; absent until it runs. */
+  visual?: number
+}
+
 export interface Clip {
   id: string
   /**
@@ -172,6 +189,12 @@ export interface Clip {
   /** Evidence route for this suggestion; not a quality or popularity guarantee. */
   discovery?: { origin: 'transcript' | 'visual'; evidenceTimes?: number[] }
   editorial?: EditorialAssessment
+  /**
+   * Present when the AI joined separate moments of the source into this
+   * clip. The join itself lives in `edit.cuts` like any other cut; this
+   * records what was proposed and why, so the clip can say what it is.
+   */
+  stitch?: { segments: TimeRange[]; reason: string }
   /** AI suggested boundaries (absolute seconds in the source video). */
   suggestedStart: number
   suggestedEnd: number
@@ -182,12 +205,36 @@ export interface Clip {
   caption?: string | null
   viralityScore: number
   viralityReason: string
+  /**
+   * The rubric parts behind `viralityScore` (see shared/scoreBreakdown.ts).
+   * Absent on clips found before parts were recorded, on visual-only
+   * suggestions, and when the model did not return them.
+   */
+  scoreBreakdown?: ScoreBreakdown
   /** One-line LLM assessment of what the visuals add/cost; null until scored. */
   visualSummary: string | null
   /** Visual action explicitly retained when speech-based tightening removes pauses. */
   visualStory?: {
     protectedRanges: Array<{ start: number; end: number }>
     reason: string
+  }
+  /**
+   * Silent pauses with something happening in them — sustained picture
+   * motion, or non-speech sound close to speech level — measured during
+   * framing analysis (main/pipeline/gapActivity.ts). `active` is kept by
+   * pause removal like `visualStory.protectedRanges`. Source seconds, so a
+   * later trim change leaves them valid; gaps that only exist under a new
+   * trim are simply unmeasured.
+   */
+  gapActivity?: {
+    version: number
+    /** The trim the measurement was taken for. */
+    start: number
+    end: number
+    /** Every gap that was measured, active or not. */
+    measured: TimeRange[]
+    /** The parts of measured gaps to keep. */
+    active: TimeRange[]
   }
   /** Source-frame review; conservative layout constraints for the inspected interval. */
   visualLayout?: {
@@ -211,7 +258,14 @@ export interface Clip {
   /** See ReframeStatus. Undefined means done (older projects). */
   reframeStatus?: ReframeStatus
   /** Source interval actually analysed; trimming inside it can reuse the result. */
-  reframeAnalysis?: { start: number; end: number; version: number; revision?: number }
+  reframeAnalysis?: {
+    start: number
+    end: number
+    version: number
+    revision?: number
+    /** The stretches analysed when the trim joins distant moments; absent = all of start..end. */
+    ranges?: TimeRange[]
+  }
   /**
    * Whether the clip is mostly a talking head or a screencast/demo/slides.
    * Set during analysis; null on older projects until re-analysed.
@@ -320,6 +374,12 @@ export interface AnalyzeOptions {
   visualDiscovery?: boolean
   /** Explicit opt-in while provider behavior and quality are being evaluated. */
   editorialRanking?: boolean
+  /**
+   * Let a clip join two or three separate moments (a question and its answer
+   * with the tangent between removed, a setup and its later payoff). Every
+   * join is reviewed for coherence and for keeping the speaker's meaning.
+   */
+  stitch?: boolean
 }
 
 export type ClipLengthPreference = 'auto' | 'short' | 'medium' | 'long'

@@ -297,10 +297,13 @@ function SetupPanel(): React.JSX.Element {
   const [videoType, setVideoType] = useState<VideoType>(project.videoType ?? 'auto')
   // Off by default: B-roll costs extra LLM/image calls and splits opinion.
   const [broll, setBroll] = useState(false)
-  // Off by default: hook-first trimming rewrites clip starts with an extra LLM pass.
-  const [hookFirst, setHookFirst] = useState(false)
+  // On by default: the opening seconds decide whether a clip is watched. It
+  // costs one more analysis request, so it stays opt-in on ChatGPT sign-in,
+  // where requests count against a small daily cap.
+  const [hookFirst, setHookFirst] = useState(settings?.subscription.provider !== 'chatgpt')
   const [visualDiscovery, setVisualDiscovery] = useState(project.visualDiscovery ?? false)
   const [editorialRanking, setEditorialRanking] = useState(project.rankingEnabled ?? false)
+  const [stitch, setStitch] = useState(false)
 
   // Captioning an already-transcribed video makes no API calls, so it does not
   // need a key; clip finding always does.
@@ -405,6 +408,25 @@ function SetupPanel(): React.JSX.Element {
                 </span>
               </label>
               <DiscoverySummary report={project.discoveryReport} earlierAttempt={!!project.discoveryReport?.generationId && project.discoveryReport.generationId !== project.clipsGenerationId} />
+            </div>
+            <div className="rounded-2xl border border-surface-700 bg-surface-900 p-5">
+              <label className="flex items-start gap-3 text-sm font-semibold">
+                <input type="checkbox" checked={stitch} onChange={e => setStitch(e.target.checked)}
+                  className="mt-1" data-testid="stitch-toggle" />
+                <span>Join separate moments <span className="font-normal text-zinc-400">(beta)</span>
+                  <span className="mt-1 block text-xs font-normal leading-relaxed text-zinc-400">
+                    Let a clip put two or three moments together when that makes a better one: a question and its
+                    answer with the tangent between them removed, or a setup and its later payoff. Most clips stay
+                    one continuous moment. Every join gets one extra AI review that it plays seamlessly and keeps
+                    what was said; joined clips are labelled, and you can move or undo the join in the editor.
+                    {' '}Moments up to about five minutes apart are found as clips are picked. On videos with more
+                    than twenty minutes of speech, moments further apart are joined only when an outline of the
+                    whole video pairs them: about one extra request per twelve minutes of speech plus two (13 for
+                    two hours) the first time, one on later runs. ChatGPT sign-in skips the outline and reads the
+                    whole video in one request instead.
+                  </span>
+                </span>
+              </label>
             </div>
             <div className="rounded-2xl border border-surface-700 bg-surface-900 p-5">
               <label className="flex items-center gap-2 text-sm font-semibold">
@@ -554,7 +576,7 @@ function SetupPanel(): React.JSX.Element {
                 data-testid="start-button"
                 onClick={() =>
                   mode === 'clips'
-                    ? void analyze({ prompt, clipLength, broll, hookFirst, videoType, visualDiscovery, editorialRanking })
+                    ? void analyze({ prompt, clipLength, broll, hookFirst, videoType, visualDiscovery, editorialRanking, stitch })
                     : void captionWholeVideo({
                         aspect: captionAspect,
                         followSpeaker,

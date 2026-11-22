@@ -1,5 +1,5 @@
 import type { BrandVoiceSettings, Clip, Transcript } from '@shared/types'
-import { wordsInRange } from '@shared/captionLayout'
+import { selectedWords } from '@shared/clipSegments'
 import { chatJSON } from './openai'
 
 /**
@@ -66,7 +66,7 @@ export async function generateSocialCaption(
   signal?: AbortSignal
 ): Promise<string> {
   const excerpt = transcript
-    ? wordsInRange(transcript, clip.edit.start, clip.edit.end)
+    ? selectedWords(transcript, clip.edit)
         .map((w) => w.text)
         .join(' ')
         .slice(0, 1800)

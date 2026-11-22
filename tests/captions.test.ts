@@ -116,4 +116,18 @@ describe('buildAss', () => {
     expect(ass).toContain('Style: Caption,My Brand Font,')
     expect(ass).toContain('Style: Title,My Brand Font,')
   })
+
+  it('burns big-word styles without commas and full stops, and subtitle styles with them', () => {
+    const t = makeTranscript(['Well, this works.', 'Does it?'])
+    const text = (styleId: string): string => buildAss(t, { ...base, styleId, clipEnd: t.durationSec })
+      .split('\n').filter((l) => l.startsWith('Dialogue: 0')).join('\n')
+    const beast = text('beast')
+    expect(beast).toContain('}WELL{')
+    expect(beast).toContain('}WORKS{')
+    expect(beast).toContain('}IT?{')
+    expect(beast).not.toMatch(/WELL,|WORKS\./)
+    const minimal = text('minimal')
+    expect(minimal).toContain('}Well,{')
+    expect(minimal).toContain('}works.{')
+  })
 })

@@ -7,7 +7,10 @@ import type { AnalyzeOptions, BrowserCookieSource, ImportProgress, PipelineProgr
 import { mapLimit } from './concurrency'
 import { extractThumbnail, probeVideo } from './ffmpeg'
 import { ensureTranscript } from './projectTranscript'
-import { dedupeClips, detectHighlights, maxDurationFor } from './highlights'
+// Visual discovery and visual-payoff repair keep to the length target: only
+// transcript clips get the overrun allowance, because only they get the
+// overrun ranking penalty and note (see applyLengthPenalties).
+import { dedupeClips, detectHighlights, softMaxDurationFor } from './highlights'
 import { discoverSourceMoments } from './sourceDiscovery'
 import { visualCandidateClip } from './visualCandidates'
 import { rankEditorialCandidates } from './editorialReview'
@@ -168,12 +171,12 @@ export async function analyzeProject(
     const discovery = options.visualDiscovery ? await timed('source-discovery', () => discoverSourceMoments({
       videoPath: project.video.path, durationSec: project.video.durationSec, transcript,
       apiKey, model: settings.analysisModel, providerCacheKey: settings.analysisProviderKey,
-      prompt: options.prompt, maxClipDurationSec: maxDurationFor(options.clipLength),
+      prompt: options.prompt, maxClipDurationSec: softMaxDurationFor(options.clipLength),
       cacheDir: join(projectDir(project.id), 'discovery-cache'), signal,
       onProgress: message => onProgress({ stage: 'analyze', progress: .58, message })
     })) : undefined
     const visualClips = (discovery?.candidates ?? []).flatMap(candidate => {
-      const clip = visualCandidateClip(candidate, transcript, project.video.durationSec, maxDurationFor(options.clipLength))
+      const clip = visualCandidateClip(candidate, transcript, project.video.durationSec, softMaxDurationFor(options.clipLength))
       return clip ? [clip] : []
     })
     if (discovery) {
@@ -196,7 +199,11 @@ export async function analyzeProject(
       transcript,
       options,
       project.video.durationSec,
-      signal
+      signal,
+      ({ fraction, message }) => onProgress({ stage: 'analyze', progress: 0.6 + fraction * 0.04, message }),
+      // The outline of the whole video, used to join distant moments, is
+      // reused across regenerations; it depends only on the transcript and model.
+      { cacheDir: join(projectDir(project.id), 'outline-cache'), providerCacheKey: settings.analysisProviderKey }
     )) : []
     for (const clip of clips) clip.discovery = { origin: 'transcript' }
     clips.push(...visualClips)
@@ -211,7 +218,7 @@ export async function analyzeProject(
     let scored = 0
     const incomplete = new Set<string>()
     const incoherent = new Set<string>()
-    await timed('visual-review', () => mapLimit(clips, 3, async (clip) => {
+    await timed('visual-review', () => mapLimit(clips, 4, async (clip) => {
       signal?.throwIfAborted()
       let visual = await assessClipVisuals(
         apiKey,
@@ -223,7 +230,7 @@ export async function analyzeProject(
       )
       if (visual?.needsVisualPayoff) {
         const repaired = await completeVisualStory(apiKey, settings.analysisModel, project.video.path,
-          transcript, clip, project.video.durationSec, maxDurationFor(options.clipLength), signal)
+          transcript, clip, project.video.durationSec, softMaxDurationFor(options.clipLength), signal)
         if (repaired) {
           Object.assign(clip, repaired)
           visual = await assessClipVisuals(apiKey, settings.analysisModel, project.video.path, transcript, clip, signal)
@@ -233,6 +240,7 @@ export async function analyzeProject(
       }
       if (visual) {
         if (visual.storyIssue) incoherent.add(clip.id)
+        if (clip.scoreBreakdown) clip.scoreBreakdown = { ...clip.scoreBreakdown, visual: visual.visualScore }
         clip.viralityScore = ensembleScore(clip.viralityScore, visual.visualScore)
         clip.visualSummary = visual.visualSummary
         clip.visualLayout = visual.visualLayout
