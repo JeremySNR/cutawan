@@ -182,7 +182,7 @@ async function runSmokeCapture(win: BrowserWindow, dir: string): Promise<void> {
   await click('[data-testid="caption-style-spark"]')
   await win.webContents.executeJavaScript(`(() => {
     const range = document.querySelector('input[type="range"][max="1000"]')
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(range, '120')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(range, '205')
     range.dispatchEvent(new Event('input', { bubbles: true }))
   })()`)
   await sleep(900)

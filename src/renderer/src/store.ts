@@ -103,6 +103,8 @@ export interface ExportEntry {
   downscaled?: boolean
   overBudget?: boolean
   check?: ExportCheckReport
+  /** The animated caption style was burned with its libass look instead (why). */
+  captionNotice?: string
 }
 
 
@@ -588,7 +590,8 @@ export const useStore = create<AppState>((set, get) => ({
             sizeTargetBytes: result.sizeTargetBytes,
             downscaled: result.downscaled,
             overBudget: result.overBudget,
-            check: result.check
+            check: result.check,
+            captionNotice: result.captionNotice
           }
         }
       })

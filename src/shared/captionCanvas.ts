@@ -309,10 +309,13 @@ function drawCard(ctx: CaptionCanvasContext, plan: AnimatedCaptionPlan, scene: C
     const liftClamped = clamp01(lift)
     const word = box.word
     const base = word.emphasis ? emphasisColor : style.textColor
-    let scale = state.appear * (1 + ACTIVE_SCALE * lift)
+    // A growing word may push into at most 40% of the gap on each side, so a
+    // long word's pop never touches its neighbours.
+    const maxGrowth = (0.8 * WORD_GAP_EM * layout.px) / Math.max(1, box.width)
+    const growth = Math.min(maxGrowth, (kind === 'prism' ? 0.1 : ACTIVE_SCALE) * lift)
+    const scale = state.appear * (1 + growth)
     let dy = 0
     if (kind === 'spark') dy = -0.08 * box.px * lift
-    if (kind === 'prism') scale = state.appear * (1 + 0.1 * lift)
     ctx.save()
     ctx.translate(box.cx, box.cy + dy)
     ctx.scale(scale, scale)

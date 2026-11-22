@@ -776,6 +776,7 @@ export default function EditorScreen(): React.JSX.Element {
               bytes={entry?.bytes}
               downscaled={entry?.downscaled}
               check={entry?.check}
+              captionNotice={entry?.captionNotice}
               onExport={() => void exportClip(clip.id)}
               onCancel={() => void cancelExport(clip.id)}
             />
@@ -797,6 +798,11 @@ export default function EditorScreen(): React.JSX.Element {
               This export is over your size limit
               {entry.sizeTargetBytes ? ` (${formatBytes(entry.sizeTargetBytes)})` : ''}. Shorten the
               clip or raise the cap.
+            </p>
+          )}
+          {entry?.status === 'done' && entry.captionNotice && (
+            <p data-testid="export-caption-notice" className="mt-2 text-[11px] leading-relaxed text-amber-400">
+              {entry.captionNotice}
             </p>
           )}
           {entry?.status === 'done' && entry.check?.findings.some(f => !f.repaired) && (
