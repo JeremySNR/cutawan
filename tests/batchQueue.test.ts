@@ -29,7 +29,8 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'cutawan-batch-'))
 })
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true })
+  // A queue's last save can still be writing when a test ends; retry the delete.
+  await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
 function harness(overrides: Partial<BatchDeps> = {}): Harness {
