@@ -109,6 +109,9 @@ describe('speech mask', () => {
     expect(at(0.5)).toBe(0)
     expect(at(3)).toBe(0) // laughter inside the VAD region stays a gap
     // Without words, VAD is all there is.
+    // A VAD region opening up to 0.8 s before its first word is that word's real start.
+    const lateWord = speechMask(100, 0.05, { durationSec: 5, words: [{ text: 'c', start: 1.54, end: 2 }], speech: [{ start: 1, end: 2.1 }] })
+    expect(lateWord[Math.round(1.1 / 0.05)]).toBe(1)
     const vadOnly = speechMask(100, 0.05, { durationSec: 5, speech: [{ start: 0.95, end: 4 }] })
     expect(vadOnly[Math.round(3 / 0.05)]).toBe(1)
   })
@@ -156,6 +159,25 @@ describe('detectReactions', () => {
     expect(found[0].start).toBeCloseTo(40, 0)
     const emphasis = synthetic(60, t => t >= 40 && t < 43 ? { level: -15, flux: 3 } : inSpeech(t) ? { level: -20 } : { level: -60 })
     expect(detectReactions(emphasis, { durationSec: 60, speech, words })).toEqual([])
+  })
+
+  it('leaves a real voice alone: stressed syllables and a word Whisper starts late', () => {
+    // Measured shape of a real (TTS) voice: syllables peak ~8 dB over the
+    // median with dips between them, and the second voice's first word is
+    // timed 0.54 s after its voice activity starts.
+    const late = words.map(w => w.start < 25 || w.start >= 26 ? w : { ...w, start: w.start + 0.54, end: Math.min(w.end + 0.54, w.start + 0.94) })
+      .filter(w => w.start < 20 || w.start >= 25.54)
+    const voice = (t: number): { level: number; flux?: number } => {
+      const phase = (t % 0.4) / 0.4
+      return phase < 0.15 ? { level: -12, flux: 9 } : phase < 0.6 ? { level: -22, flux: 6 } : { level: -34, flux: 4 }
+    }
+    const f = synthetic(60, t => inSpeech(t) ? voice(t) : { level: -120 })
+    expect(detectReactions(f, { durationSec: 60, speech, words: late })).toEqual([])
+    // A crowd over the same voice, 10 dB above its peaks, is still heard.
+    const crowd = synthetic(60, t => t >= 40 && t < 43 ? { level: -2, flux: 12, flatness: 0.4 } : inSpeech(t) ? voice(t) : { level: -120 })
+    const found = detectReactions(crowd, { durationSec: 60, speech, words: late })
+    expect(found).toHaveLength(1)
+    expect(found[0].start).toBeCloseTo(40, 0)
   })
 
   it('keeps at most one reaction per 20 s on average, the strongest', () => {

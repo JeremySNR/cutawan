@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FFMPEG_PATH } from '../src/main/pipeline/ffmpeg'
-import { burstCount, detectReactions, reactionFeatures, smoothDb as smooth, speechMask, localPercentile, type ReactionFeatures } from '../src/main/pipeline/reactions'
+import { OVER_SPEECH_PERCENTILE, OVER_SPEECH_WINDOW_SEC, burstCount, detectReactions, reactionFeatures, smoothDb as smooth, speechMask, localPercentile, type ReactionFeatures } from '../src/main/pipeline/reactions'
 import { syntheticWords, writeSynthetic, type SyntheticLayout } from '../tests/syntheticAudio'
 
 const speech = [{ start: 0.5, end: 10 }, { start: 14, end: 25 }, { start: 32, end: 45 }, { start: 49, end: 59.5 }]
@@ -64,7 +64,7 @@ try {
     const sustained = smooth(features.levelDb, 3)
     const mask = speechMask(level.length, features.hopSec, context)
     const floor = localPercentile(level, i => !mask[i] && features.levelDb[i] > -70, features.hopSec, 20, 0.2)
-    const localSpeech = localPercentile(sustained, i => mask[i] === 1 && features.levelDb[i] > -70, features.hopSec, 10, 0.5)
+    const localSpeech = localPercentile(sustained, i => mask[i] === 1 && features.levelDb[i] > -70, features.hopSec, OVER_SPEECH_WINDOW_SEC, OVER_SPEECH_PERCENTILE)
     const maxIn = (a: number, b: number, fn: (i: number) => number): number => {
       let m = -Infinity
       for (let i = Math.round(a / features.hopSec); i < Math.round(b / features.hopSec); i++) { const v = fn(i); if (!Number.isNaN(v)) m = Math.max(m, v) }
@@ -73,7 +73,7 @@ try {
     const gapExcess = (a: number, b: number): string => { const v = maxIn(a, b, i => mask[i] ? NaN : level[i] - floor[i]); let at = -1; for (let i = Math.round(a / features.hopSec); i < Math.round(b / features.hopSec); i++) if (!mask[i] && level[i] - floor[i] === v) at = i; return `${v.toFixed(1)}@${(at * features.hopSec).toFixed(2)}` }
     const speechExcess = (a: number, b: number): string => maxIn(a, b, i => mask[i] ? sustained[i] - localSpeech[i] : NaN).toFixed(1)
     console.log(`  gap excess over floor: 10-14 ${gapExcess(10, 14)}  25-32 ${gapExcess(25, 32)}  45-49 ${gapExcess(45, 49)}`)
-    console.log(`  speech excess over local median: 14-25 ${speechExcess(14, 25)}  32-45 ${speechExcess(32, 45)}`)
+    console.log(`  speech excess over the speaker's loud end: 14-25 ${speechExcess(14, 25)}  32-45 ${speechExcess(32, 45)}`)
     console.log('  reactions', JSON.stringify(detectReactions(features, context)))
   }
 } finally {

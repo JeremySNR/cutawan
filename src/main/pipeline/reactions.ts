@@ -182,14 +182,20 @@ export const GAP_ABOVE_FLOOR_DB = 12
 export const GAP_BELOW_SPEECH_DB = 10
 /**
  * Over speech, the sustained (±150 ms) level must jump this far above the
- * speaker's own median within ±10 s. Speech-like bursts peaked +1.1 to
- * +1.5 dB over their local median, also when a whole 13 s stretch was
- * delivered 6 dB louder (the median follows the speaker). Laughter mixed
- * over speech 10 dB louder than the speaker read +11.6 dB and is caught; at
- * the speaker's own level it read +4.4 dB and is deliberately missed — it
+ * speaker's own loud end: the OVER_SPEECH_PERCENTILE of their voiced frames
+ * within ±OVER_SPEECH_WINDOW_SEC, so the reference follows the speaker. The
+ * median was too low a reference for real voices: in the live two-voice
+ * check ordinary stressed syllables sat up to 8.5 dB over it, and read as
+ * reactions; they sit at most 4.0 dB over the 85th percentile of ±30 s.
+ * The wide window keeps a reaction from raising its own reference: a 3 s
+ * laugh is 5% of it, and anything up to ~9 s stays above the percentile.
+ * Laughter mixed over speech 10 dB louder than the speaker reads +11.1 dB
+ * and is caught; at the speaker's own level it is deliberately missed — it
  * cannot be told from emphatic delivery by level alone.
  */
 export const OVER_SPEECH_DB = 8
+export const OVER_SPEECH_PERCENTILE = 0.85
+export const OVER_SPEECH_WINDOW_SEC = 30
 /** Over-speech candidates must also be spectrally novel: smoothed flux this many dB above the speaker's median flux. */
 export const OVER_SPEECH_FLUX_DB = 1.5
 const MERGE_GAP_SEC = 0.4
@@ -197,6 +203,12 @@ const MERGE_GAP_SEC = 0.4
 const WORD_RUN_GAP_SEC = 0.3
 const WORD_PAD_SEC = 0.1
 const EDGE_SNAP_SEC = 0.5
+/**
+ * Whisper word starts lag the voice, most after a pause: a second voice's
+ * first word in the live two-voice check began 0.54 s after its VAD region,
+ * and the onset read as a 0.35 s gap sound. Leading edges snap further.
+ */
+const LEAD_SNAP_SEC = 0.8
 const MIN_REACTION_SEC = 0.15
 /** Edges extend while the level stays this close to the candidate's own peak region. */
 const EDGE_DROP_DB = 6
@@ -250,11 +262,22 @@ export function speechMask(frames: number, hopSec: number, context: ReactionCont
   for (const run of runs) {
     let start = run.start - WORD_PAD_SEC, end = run.end + WORD_PAD_SEC
     for (const region of speech) {
-      if (region.end < run.start - EDGE_SNAP_SEC || region.start > run.end + EDGE_SNAP_SEC) continue
-      if (region.start < start && run.start - region.start <= EDGE_SNAP_SEC) start = region.start - WORD_PAD_SEC
+      if (region.end < run.start - LEAD_SNAP_SEC || region.start > run.end + EDGE_SNAP_SEC) continue
+      if (region.start < start && run.start - region.start <= LEAD_SNAP_SEC) start = region.start - WORD_PAD_SEC
       if (region.end > end && region.end - run.end <= EDGE_SNAP_SEC) end = region.end + WORD_PAD_SEC
     }
     mark(start, end)
+  }
+  return mask
+}
+
+/** Per-frame VAD mask, or undefined without voice activity. */
+function voiceMask(frames: number, hopSec: number, speech?: SpeechRegion[]): Uint8Array | undefined {
+  if (!speech?.length) return undefined
+  const mask = new Uint8Array(frames)
+  for (const region of speech) {
+    const to = Math.min(frames, Math.ceil(region.end / hopSec))
+    for (let i = Math.max(0, Math.floor(region.start / hopSec)); i < to; i++) mask[i] = 1
   }
   return mask
 }
@@ -361,8 +384,14 @@ export function detectReactions(features: ReactionFeatures, context: ReactionCon
   const floor = localPercentile(level, i => gap(i) && audible(i), hopSec, 20, 0.2)
   // With no silence at all nearby, the floor is the room's quietest stretch overall.
   const globalFloor = percentileOf(allLevels, 0.1)
-  const localSpeech = localPercentile(sustained, i => mask[i] === 1 && audible(i), hopSec, 10, 0.5)
-  const localFlux = localPercentile(flux, i => mask[i] === 1 && audible(i), hopSec, 10, 0.5, 0, 60)
+  // The speaker's reference level comes from frames VAD also hears as voice:
+  // the word padding and Whisper's loose word starts put quiet pre-onset
+  // frames under the mask, which pulled the median down until an ordinary
+  // onset read as a jump over speech.
+  const voiced = voiceMask(frames, hopSec, context.speech)
+  const reference = (i: number): boolean => mask[i] === 1 && audible(i) && (!voiced || voiced[i] === 1)
+  const localSpeech = localPercentile(sustained, reference, hopSec, OVER_SPEECH_WINDOW_SEC, OVER_SPEECH_PERCENTILE)
+  const localFlux = localPercentile(flux, reference, hopSec, 10, 0.5, 0, 60)
 
   // Excess over the relevant reference, in dB; <= 0 means not a candidate.
   const excess = new Float32Array(frames)
