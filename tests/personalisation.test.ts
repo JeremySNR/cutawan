@@ -139,10 +139,10 @@ describe('recording', () => {
   it('ignores the captioned full video and records kind and origin', () => {
     const whole = clip(undefined, 600, { origin: 'whole-video' })
     expect(recordClips(emptyStore(), 'p', [whole]).records).toHaveLength(0)
-    const visual = { ...clip(undefined, 20, { discovery: { origin: 'visual' } }), kind: 'demo' } as Clip
+    const visual = { ...clip(undefined, 20, { discovery: { origin: 'visual' } }), kind: 'explainer' } as Clip
     const record = recordClips(emptyStore(), 'p', [visual]).records[0]
     expect(record.origin).toBe('visual')
-    expect(record.kind).toBe('demo')
+    expect(record.kind).toBe('explainer')
   })
 
   it('stays bounded, dropping the oldest ignored clips first', () => {
