@@ -4,8 +4,17 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Clip, TimeRange, Transcript, TranscriptSegment } from '@shared/types'
 import { clipKeptSegments } from '@shared/tighten'
-import { runFfmpeg } from '../src/main/pipeline/ffmpeg'
+import * as ffmpeg from '../src/main/pipeline/ffmpeg'
 import { measureGapActivity, refreshGapActivity } from '../src/main/pipeline/gapActivity'
+import { setAnalysisCacheRoot } from '../src/main/pipeline/analysisCache'
+
+const { runFfmpeg } = ffmpeg
+
+// Count decodes, so the cache can be seen to spare them.
+vi.mock('../src/main/pipeline/ffmpeg', async (original) => {
+  const actual = await original<typeof import('../src/main/pipeline/ffmpeg')>()
+  return { ...actual, streamRawFrames: vi.fn(actual.streamRawFrames) }
+})
 
 /**
  * Gap activity measured on a real, synthetic source: speech-like sections
@@ -31,6 +40,7 @@ let video: string
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'cutawan-gap-activity-'))
+  setAnalysisCacheRoot(join(dir, 'cache'))
   video = join(dir, 'source.mp4')
   const inGap = (i: number): string => `between(t,${gapOf(i).start},${gapOf(i).end})`
   const speaking = Array.from({ length: SECTIONS }, (_, i) => `between(t,${at(i)},${at(i) + SPEECH})`).join('+')
@@ -62,6 +72,7 @@ beforeAll(async () => {
 }, 120_000)
 
 afterAll(async () => {
+  setAnalysisCacheRoot(undefined)
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -115,6 +126,29 @@ describe('measuring activity in pauses', () => {
     const kept = clipKeptSegments(measured, transcript())!
     const keptGap = (i: number): boolean => kept.some(k => k.start <= gapOf(i).start + 0.3 && k.end >= gapOf(i).end - 0.3)
     expect([STILL, GRAIN, MOVING, HARD_CUT, LOUD, BREATH].filter(keptGap)).toEqual([MOVING, LOUD])
+  }, 60_000)
+
+  it('measures each source once: a re-analysis reads the cache, not the video', async () => {
+    const first = await measureGapActivity(video, clip(), transcript())
+    // A fresh run of the app: nothing in memory, only what is on disk.
+    setAnalysisCacheRoot(join(dir, 'cache'))
+    const decodes = vi.mocked(ffmpeg.streamRawFrames)
+    decodes.mockClear()
+    const started = performance.now()
+    const again = await measureGapActivity(video, clip(), transcript())
+    console.info(`[gap activity] measured again from the cache in ${((performance.now() - started) / 1000).toFixed(2)} s`)
+    expect(again).toEqual(first)
+    expect(decodes).not.toHaveBeenCalled()
+    // A wider trim decodes only the footage it adds.
+    const narrow = clip({ start: 0, end: at(3) })
+    setAnalysisCacheRoot(join(dir, 'narrow-cache'))
+    await measureGapActivity(video, narrow, transcript())
+    decodes.mockClear()
+    await measureGapActivity(video, clip(), transcript())
+    const decodedSec = decodes.mock.calls.reduce((sum, [args]) => sum + Number(args[args.indexOf('-t') + 1]), 0)
+    expect(decodedSec).toBeGreaterThan(0)
+    expect(decodedSec).toBeLessThan(2 * (DURATION - at(3)) + 1)
+    setAnalysisCacheRoot(join(dir, 'cache'))
   }, 60_000)
 
   it('never decodes the stretch a joined clip skips', async () => {
