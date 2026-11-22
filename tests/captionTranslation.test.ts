@@ -161,6 +161,20 @@ describe('timing translated cards', () => {
   const style = getCaptionStyle('beast')
   const font = translationFont('Anton', 'x', 'linux')
 
+  it('shifts translated captions by a cold open that plays first', () => {
+    const translation = translationFor(clip, transcript, ['aaaa bbbb cccc dd ee ff', 'corto.', 'final.'])
+    const plain = translatedCaptionEvents(translation.lines, null, clip.edit.start, clip.edit.end,
+      { style, aspectRatio: 9 / 16, font, scale: 1 })
+    const shifted = translatedCaptionEvents(translation.lines, null, clip.edit.start, clip.edit.end,
+      { style, aspectRatio: 9 / 16, font, scale: 1, outputOffset: 2.5 })
+    expect(shifted).toHaveLength(plain.length)
+    shifted.forEach((e, i) => {
+      expect(e.start).toBeCloseTo(plain[i].start + 2.5, 9)
+      expect(e.end).toBeCloseTo(plain[i].end + 2.5, 9)
+    })
+    expect(shifted.map((e) => e.lines)).toEqual(plain.map((e) => e.lines))
+  })
+
   it('shares each sentence slot between its cards by text length and holds the last card', () => {
     const translation = translationFor(clip, transcript, ['aaaa bbbb cccc dd ee ff', 'corto.', 'final.'])
     const events = translatedCaptionEvents(translation.lines, null, clip.edit.start, clip.edit.end,

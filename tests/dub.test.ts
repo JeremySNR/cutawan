@@ -109,6 +109,21 @@ describe('planning dub cues', () => {
     expect(cues[2].start + cues[2].duration).toBeLessThanOrEqual(clip.edit.end - DUB_LINE_GAP_SEC + 1e-9)
   })
 
+  it('shifts every line by a cold open that plays first, keeping the same slots', () => {
+    const clip = makeClip(transcript)
+    clip.dub = dubFor(clip, [1, 30, 30])
+    const plain = planDubCues(clip, transcript, null)
+    const total = plain.length ? clip.edit.end - clip.edit.start + 3 : 0
+    const shifted = planDubCues(clip, transcript, null, total, 3)
+    expect(shifted).toHaveLength(plain.length)
+    shifted.forEach((cue, i) => {
+      expect(cue.start).toBeCloseTo(plain[i].start + 3, 9)
+      expect(cue.duration).toBeCloseTo(plain[i].duration, 9)
+    })
+    // Nothing is voiced during the cold open itself.
+    expect(Math.min(...shifted.map((c) => c.start))).toBeGreaterThanOrEqual(3)
+  })
+
   it('applies the line tempo to its length', () => {
     const clip = makeClip(transcript)
     clip.dub = dubFor(clip, 1.25, 1.25)

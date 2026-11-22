@@ -6,6 +6,7 @@ import type { Clip, Transcript, VideoInfo } from '@shared/types'
 import { playedSentences } from '@shared/captionTranslation'
 import { planDubCues, DUB_DUCK_DB } from '@shared/dubPlan'
 import { clipKeptSegments } from '@shared/tighten'
+import { clipTimeline } from '@shared/clipTimeline'
 import { FFMPEG_PATH, FFPROBE_PATH, probeVideo, runBinary, runFfmpeg } from '../src/main/pipeline/ffmpeg'
 import { alignSegmentsToFrames, renderClip } from '../src/main/pipeline/render'
 import { makeTranscript } from './helpers'
@@ -147,6 +148,36 @@ describe('exporting a dubbed clip', () => {
       const inside = cues.some((c) => t + window > c.start - 0.05 && t < c.start + c.duration + 0.05)
       if (!inside) expect(toneLevel(audio, 1000, t, t + window)).toBeLessThan(reference * 0.05)
     }
+  }, 120_000)
+})
+
+describe('a dubbed clip that opens with a cold open', () => {
+  it('voices each line after the cold open, at its shifted place, and mixes the right input', async () => {
+    const clip = dubbedClip()
+    // Uncut, so the last sentence sits more than 8 s in and can be the cold open.
+    clip.edit.cuts = []
+    clip.edit.coldOpen = true
+    const timeline = clipTimeline(clip, transcript)
+    // The replayed line is the last sentence, at least 8 s into the clip.
+    expect(timeline.coldOpenDuration).toBeGreaterThan(1)
+    const outputPath = join(dir, 'dubbed-cold-open.mp4')
+    await renderClip({ clip, source, transcript, outputPath, encoder: 'cpu', quality: 'draft' })
+    const info = await probeVideo(outputPath)
+    expect(info.hasAudio).toBe(true)
+    expect(Math.abs(info.durationSec - timeline.outputDuration)).toBeLessThan(0.15)
+
+    const cues = planDubCues(clip, transcript, timeline.pieces.filter((p) => !p.coldOpen), timeline.outputDuration, timeline.coldOpenDuration)
+    expect(cues.map((c) => c.text)).toEqual(['línea 1', 'línea 2', 'línea 3'])
+    expect(cues[0].start).toBeGreaterThanOrEqual(timeline.coldOpenDuration)
+    const audio = await decodeAudio(outputPath)
+    // The dub plays where it was planned (the input index counts the cold
+    // open's own input, or this would mix the wrong file)…
+    for (const cue of cues) {
+      expect(toneLevel(audio, 1000, cue.start + 0.25, cue.start + cue.duration - 0.25)).toBeGreaterThan(0.05)
+    }
+    // …and not during the cold open, which replays the original voice.
+    expect(toneLevel(audio, 1000, 0.1, timeline.coldOpenDuration - 0.15)).toBeLessThan(0.01)
+    expect(toneLevel(audio, 220, 0.1, timeline.coldOpenDuration - 0.15)).toBeGreaterThan(0.05)
   }, 120_000)
 })
 
