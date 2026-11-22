@@ -3,7 +3,7 @@ import { app } from 'electron'
 import type { Transcript, BrandColors, CaptionEmphasisWord, TitleStyleId } from '@shared/types'
 import { captionEmphasisLook, resolveCaptionStyle, type CaptionStyle } from '@shared/captionStyles'
 import { captionPositionAt, type CaptionPositionRange } from '@shared/contentRegion'
-import { CAPTION_EMOJI_FONT, EMPHASIS_SCALE } from '@shared/captionEmphasis'
+import { CAPTION_EMOJI_FONT, EMOJI_EM, EMPHASIS_SCALE } from '@shared/captionEmphasis'
 import { planTitle, type TitlePlan } from '@shared/titleLayout'
 import type { FontMetrics } from '../fonts'
 import {
@@ -71,8 +71,6 @@ function escapeAss(text: string): string {
  * file is ours; tests/fonts.test.ts checks them against the file.
  */
 export const EMOJI_FONT_METRICS: FontMetrics = { unitsPerEm: 2048, winSpan: 2400 }
-/** Emoji em size relative to the caption's em (the preview uses the same). */
-export const EMOJI_EM = 0.95
 
 function renderGroupText(group: WordGroup, activeIndex: number, style: CaptionStyle, emojiFontSize: number): string {
   const highlight = assColor(style.highlightColor)

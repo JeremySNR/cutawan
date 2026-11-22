@@ -3,12 +3,14 @@ import {
   Captions,
   CaseUpper,
   Check,
+  Clapperboard,
   Copy,
   Crop,
   ExternalLink,
   GalleryVerticalEnd,
   ImagePlus,
   Loader2,
+  Music,
   Quote,
   ScanFace,
   Scissors,
@@ -35,6 +37,11 @@ import TranscriptEditor from './TranscriptEditor'
 import { ExportButton } from './ClipsScreen'
 import SizeTargetControls from './SizeTargetControls'
 import { CAPTION_STYLES, resolveCaptionStyle } from '@shared/captionStyles'
+import { DEFAULT_TITLE_STYLE, TITLE_SHOW_SEC, TITLE_STYLES } from '@shared/titleLayout'
+import { clipTimelineParts } from '@shared/clipTimeline'
+import { wordsInRange } from '@shared/captionLayout'
+import { pickMusicTrack } from '@shared/audioMix'
+import { useMusicTracks } from '../lib/musicTracks'
 import { formatBytes, formatTimecode } from '../lib/format'
 import type { AspectRatio, BrollItem, BrollMode, Clip, FramingMode, ReframeMode } from '@shared/types'
 
@@ -64,6 +71,8 @@ export default function EditorScreen(): React.JSX.Element {
   const brandColors = useStore((s) => s.settings?.branding.colors)
   const ensureReframe = useStore((s) => s.ensureReframe)
   const reframeError = useStore((s) => s.reframeError)
+  const settingsMusicFolder = useStore((s) => s.settings?.musicFolder ?? null)
+  const musicTracks = useMusicTracks()
 
   const clip = project?.clips.find((c) => c.id === selectedClipId) ?? null
 
@@ -124,6 +133,12 @@ export default function EditorScreen(): React.JSX.Element {
     if (clipId && !sourceMissing) void ensureReframe(clipId)
     // Later trim changes trigger analysis after updateClip has saved them.
   }, [clipId, sourceMissing, ensureReframe])
+
+  // The line a cold open would replay (the same plan the preview and export use).
+  const coldOpenRange = clip?.edit.coldOpen && project ? clipTimelineParts(clip, project.transcript).coldOpen : null
+  const coldOpen = coldOpenRange && project?.transcript
+    ? { ...coldOpenRange, text: wordsInRange(project.transcript, coldOpenRange.start, coldOpenRange.end).map((w) => w.text).join(' ') }
+    : null
 
   if (!project || !clip) return <div />
 
@@ -441,25 +456,141 @@ export default function EditorScreen(): React.JSX.Element {
               )}
             </div>
           )}
-          <div className="mt-3">
+          {clip.edit.captionsEnabled && (
+            <div className="mt-3 space-y-2">
+              <Toggle
+                label="Emphasise keywords"
+                checked={clip.edit.emphasis !== false}
+                onChange={(v) => set({ emphasis: v })}
+              />
+              <Toggle
+                label="Emoji after some key words"
+                checked={clip.edit.emoji === true}
+                disabled={clip.edit.emphasis === false}
+                onChange={(v) => set({ emoji: v })}
+              />
+              <p className="text-[10px] leading-relaxed text-zinc-600">
+                {clip.emphasis?.words.length
+                  ? 'Key words were picked by the AI review of this clip. '
+                  : 'Key words are picked from numbers, names and strong words. '}
+                Emoji are outline icons in the caption colour: burned-in captions cannot draw colour
+                emoji, so the preview shows exactly what exports.
+              </p>
+            </div>
+          )}
+        </Section>
+
+        <Section icon={Clapperboard} title="Opening">
+          <Toggle
+            label="Hook title at the start"
+            checked={clip.edit.showTitle}
+            onChange={(v) => set({ showTitle: v })}
+          />
+          {clip.edit.showTitle && (
+            <>
+              <div className="mt-2.5 grid grid-cols-3 gap-1.5" data-testid="title-styles">
+                {TITLE_STYLES.map((t) => {
+                  const look = resolveCaptionStyle(clip.edit.captionStyleId, brandColors, clip.edit.captionFontFamily)
+                  const accent = look.highlightBoxColor ?? look.highlightColor
+                  const selected = (clip.edit.titleStyle ?? DEFAULT_TITLE_STYLE) === t.id
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => set({ titleStyle: t.id })}
+                      title={t.hint}
+                      className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 transition ${
+                        selected ? 'border-white/30 bg-white/[0.07]' : 'border-surface-600 hover:bg-surface-800'
+                      }`}
+                    >
+                      <span
+                        className="rounded px-1.5 py-0.5 text-[11px] leading-tight"
+                        style={{
+                          fontFamily: `'${look.fontFamily}', sans-serif`,
+                          fontWeight: 700,
+                          color: t.id === 'bold' ? look.textColor : t.id === 'banner' ? '#111' : '#fff',
+                          backgroundColor: t.id === 'card' ? 'rgba(0,0,0,0.75)' : t.id === 'banner' ? accent : 'transparent',
+                          textShadow: t.id === 'bold' ? `0 0 3px ${look.outlineColor}, 1px 1px 1px ${look.outlineColor}` : undefined
+                        }}
+                      >
+                        {t.id === 'bold' ? (
+                          <>{look.uppercase ? 'THE ' : 'The '}<span style={{ color: accent }}>{look.uppercase ? 'HOOK' : 'hook'}</span></>
+                        ) : 'The hook'}
+                      </span>
+                      <span className="text-[10px] text-zinc-500">{t.name}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="mt-2.5">
+                <div className="mb-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
+                  <CaseUpper size={13} /> Hook text
+                </div>
+                <input
+                  value={clip.hook}
+                  onChange={(e) => updateClipLocal({ ...clip, hook: e.target.value })}
+                  onBlur={() => void updateClip(clip)}
+                  className="w-full rounded-lg border border-surface-600 bg-surface-850 px-3 py-2 text-xs text-zinc-200 focus:border-white/25 focus:outline-none"
+                />
+                <p className="mt-1 text-[10px] leading-relaxed text-zinc-600">
+                  Shown for the first {TITLE_SHOW_SEC} seconds{coldOpen ? ', after the cold open' : ''}, balanced over up to three lines inside the top safe area.
+                </p>
+              </div>
+            </>
+          )}
+          <div className="mt-2">
             <Toggle
-              label="Show hook title at start"
-              checked={clip.edit.showTitle}
-              onChange={(v) => set({ showTitle: v })}
+              label="Cold open — replay the strongest line first"
+              checked={clip.edit.coldOpen === true}
+              onChange={(v) => set({ coldOpen: v })}
+            />
+            {clip.edit.coldOpen && (
+              <p className="mt-1 text-[11px] leading-relaxed text-zinc-500" data-testid="cold-open-line">
+                {coldOpen
+                  ? <>Opens on “{coldOpen.text}” ({(coldOpen.end - coldOpen.start).toFixed(1)}s), then plays the clip from the top.</>
+                  : 'No line qualifies yet: a cold open needs a spoken line of 1–4 seconds at least 8 seconds into the clip.'}
+              </p>
+            )}
+          </div>
+        </Section>
+
+        <Section icon={Music} title="Sound">
+          <Toggle
+            label="Sound effects — whoosh on cuts, pop on the title"
+            checked={clip.edit.soundEffects === true}
+            disabled={!project.video.hasAudio}
+            onChange={(v) => set({ soundEffects: v })}
+          />
+          <div className="mt-2">
+            <Toggle
+              label="Background music"
+              checked={clip.edit.music === true}
+              disabled={!project.video.hasAudio || musicTracks.length === 0}
+              onChange={(v) => set({ music: v })}
             />
           </div>
-          {clip.edit.showTitle && (
-            <div className="mt-2.5">
-              <div className="mb-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
-                <CaseUpper size={13} /> Hook text
-              </div>
-              <input
-                value={clip.hook}
-                onChange={(e) => updateClipLocal({ ...clip, hook: e.target.value })}
-                onBlur={() => void updateClip(clip)}
-                className="w-full rounded-lg border border-surface-600 bg-surface-850 px-3 py-2 text-xs text-zinc-200 focus:border-white/25 focus:outline-none"
-              />
-            </div>
+          {musicTracks.length === 0 ? (
+            <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+              {settingsMusicFolder
+                ? 'The music folder has no audio files.'
+                : 'Choose a folder of music you have the rights to in Settings → Export.'}
+            </p>
+          ) : clip.edit.music && (
+            <select
+              value={clip.edit.musicTrack && musicTracks.some((t) => t.name === clip.edit.musicTrack) ? clip.edit.musicTrack : ''}
+              onChange={(e) => set({ musicTrack: e.target.value || null })}
+              className="mt-2 w-full rounded-lg border border-surface-600 bg-surface-850 px-3 py-2 text-xs text-zinc-200 focus:border-white/25 focus:outline-none"
+            >
+              <option value="">Pick automatically ({pickMusicTrack(musicTracks.map((t) => t.name), clip.id, null)})</option>
+              {musicTracks.map((t) => (
+                <option key={t.name} value={t.name}>{t.name}</option>
+              ))}
+            </select>
+          )}
+          {(clip.edit.music || clip.edit.soundEffects) && (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600">
+              Music loops under the clip and ducks while someone speaks. The preview plays both at
+              estimated levels; the export measures and mixes them exactly.
+            </p>
           )}
         </Section>
 

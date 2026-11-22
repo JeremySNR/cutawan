@@ -74,6 +74,19 @@ const GLYPH_WIDTH_EM: Record<string, { lower: number; upper: number }> = {
   'Poppins Medium': { lower: 0.56, upper: 0.63 }
 }
 const DEFAULT_GLYPH_WIDTH_EM = { lower: 0.62, upper: 0.7 }
+
+/**
+ * Line pitch libass uses for the bundled fonts, in em: it advances each line
+ * by the font size, which it scales to the OS/2 win ascent + descent (see
+ * assFontSize), so the pitch is that span over the em. The preview sets its
+ * line height from this so two-line captions and titles stack the same.
+ * Unknown fonts use the same typical ratio as assFontSize's fallback.
+ */
+const LINE_PITCH_EM: Record<string, number> = { Anton: 1.733, Poppins: 1.762, 'Poppins Medium': 1.762 }
+
+export function captionLinePitchEm(fontFamily: string): number {
+  return LINE_PITCH_EM[fontFamily] ?? 1.75
+}
 /** A space is narrower than a letter in every face we ship. */
 const SPACE_WIDTH_EM = 0.26
 /**

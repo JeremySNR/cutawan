@@ -42,6 +42,8 @@ export function normalizeEmoji(value: string | undefined | null): string | null 
 export const EMPHASIS_SCALE = 1.18
 /** Width an emoji (plus its gap) adds to a line, in em of the caption font. */
 export const EMOJI_WIDTH_EM = 1.3
+/** Emoji em size relative to the caption's em (the ASS and the preview both use it). */
+export const EMOJI_EM = 0.95
 /** At most one emoji in this many seconds of output, and this many per clip. */
 const EMOJI_MIN_GAP_SEC = 6
 const EMOJI_MAX_PER_CLIP = 4

@@ -32,6 +32,8 @@ export interface PreviewFramePlan {
   manualFocusX: number
   isCrop: boolean
   fitRanges?: Array<Omit<LayoutShot, 'mode'>>
+  /** True while a cold open plays: the export leaves it unzoomed. */
+  unzoomed?: boolean
 }
 
 /** Share of the gap to each fresh currentTime report closed per report. */
@@ -71,7 +73,7 @@ export function previewFocusX(plan: PreviewFramePlan, t: number): number {
 }
 
 export function previewZoom(plan: PreviewFramePlan, t: number): number {
-  if (plan.fitRanges?.length) return 1
+  if (plan.fitRanges?.length || plan.unzoomed) return 1
   return plan.zoomEvents ? zoomAt(plan.zoomEvents, t) : 1
 }
 

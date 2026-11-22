@@ -187,3 +187,13 @@ export function musicGainEnvelope(spans: Array<{ start: number; end: number }>, 
     .sort((a, b) => a.t - b.t)
   return withFades.map((p) => ({ t: p.t, gain: p.gain * fade(p.t) }))
 }
+
+/** The envelope's gain at output time `t` (linear between breakpoints). */
+export function envelopeGain(points: Array<{ t: number; gain: number }>, t: number): number {
+  if (!points.length) return 1
+  const i = points.findIndex((p) => p.t > t)
+  if (i === 0) return points[0].gain
+  if (i === -1) return points[points.length - 1].gain
+  const a = points[i - 1], b = points[i]
+  return a.gain + (b.gain - a.gain) * ((t - a.t) / Math.max(1e-6, b.t - a.t))
+}

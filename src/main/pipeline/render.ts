@@ -26,9 +26,9 @@ import {
   WHOOSH_BAND,
   WHOOSH_ENVELOPE_EXPR,
   dbToGain,
-  planSoundEffects,
   type SfxCue
 } from '@shared/audioMix'
+import { clipCaptionOptions, clipSoundEffects } from '@shared/clipOverlays'
 import { SEPARATE_STRETCH_GAP_SEC, limitStretches, sourceStretches } from '@shared/clipSegments'
 import type { TimeRange } from '@shared/types'
 import { focusPanDuration, focusSnaps } from '@shared/focusTrack'
@@ -834,15 +834,8 @@ async function planAudioMix(
   job: RenderJob
 ): Promise<AudioMixPlan | null> {
   const speechLufs = loudness && Number.isFinite(loudness.inputI) && loudness.inputI > -70 ? loudness.inputI : DEFAULT_SPEECH_LUFS
-  const sfx = clip.edit.soundEffects
-    ? planSoundEffects({
-        duration: outputDuration,
-        coldOpenSeam: timeline?.hasColdOpen ? timeline.coldOpenDuration : null,
-        titleAt,
-        joins: sourceStretches(clip.edit).slice(1)
-          .map((stretch) => (timeline ? timeline.toOutput(stretch.start) : stretch.start - clip.edit.start))
-      })
-    : []
+  // Same cues as the preview (clipSoundEffects), on the same timeline.
+  const sfx = clipSoundEffects(clip, timeline ?? new ClipTimeline([{ start: clip.edit.start, end: clip.edit.start + outputDuration }]), titleAt)
   const musicPath = clip.edit.music && job.musicPath && existsSync(job.musicPath) ? job.musicPath : null
   if (!sfx.length && !musicPath) return null
   let musicGainDb = 0
@@ -983,11 +976,8 @@ async function render(job: RenderJob): Promise<RenderResult> {
       fontFamily: clip.edit.captionFontFamily ?? undefined,
       brandColors: job.branding?.colors,
       positionRanges,
-      breaks: timeline?.hasColdOpen ? [captionStart + timeline.coldOpenDuration] : [],
-      emphasis: clip.edit.emphasis !== false,
-      emoji: clip.edit.emoji === true,
-      keywords: clip.emphasis?.words,
-      hook: clip.hook
+      // Seams and emphasis exactly as the preview lays them out.
+      ...clipCaptionOptions(clip, timeline ?? new ClipTimeline([{ start, end: clip.edit.end }]), captionStart)
     })
     const dir = join(tmpdir(), 'cutawan')
     await mkdir(dir, { recursive: true })
