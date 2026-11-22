@@ -31,6 +31,9 @@ async function run(request: InferenceRequest): Promise<InferenceResponse> {
     for (const [name, input] of Object.entries(request.inputs)) {
       inputs[name] = new ort.Tensor('float32', input.data, input.dims)
     }
+    for (const [name, input] of Object.entries(request.int64Inputs ?? {})) {
+      inputs[name] = new ort.Tensor('int64', input.data, input.dims)
+    }
     results = await session.run(inputs)
     const outputs: Record<string, TensorData> = {}
     for (const [name, tensor] of Object.entries(results)) {

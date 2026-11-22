@@ -19,8 +19,8 @@ export class InferenceClient {
   ) {}
 
   run(modelPath: string, inputs: Record<string, TensorData>, signal?: AbortSignal,
-    vad?: InferenceRequest['vad']): Promise<Record<string, TensorData>> {
-    const result = this.queue.then(() => this.execute(modelPath, inputs, signal, vad))
+    vad?: InferenceRequest['vad'], int64Inputs?: InferenceRequest['int64Inputs']): Promise<Record<string, TensorData>> {
+    const result = this.queue.then(() => this.execute(modelPath, inputs, signal, vad, int64Inputs))
     this.queue = result.catch(() => undefined)
     return result
   }
@@ -33,7 +33,7 @@ export class InferenceClient {
   }
 
   private execute(modelPath: string, inputs: Record<string, TensorData>, signal?: AbortSignal,
-    vad?: InferenceRequest['vad']): Promise<Record<string, TensorData>> {
+    vad?: InferenceRequest['vad'], int64Inputs?: InferenceRequest['int64Inputs']): Promise<Record<string, TensorData>> {
     signal?.throwIfAborted()
     if (this.failure) throw this.failure
     clearTimeout(this.idle)
@@ -100,7 +100,7 @@ export class InferenceClient {
       signal?.addEventListener('abort', abort, { once: true })
       if (signal?.aborted) return abort()
       try {
-        active.send({ id, modelPath, inputs, vad }, error => { if (error && !settled) failed(error) })
+        active.send({ id, modelPath, inputs, vad, int64Inputs }, error => { if (error && !settled) failed(error) })
       } catch (error) {
         failed(error instanceof Error ? error : new Error(String(error)))
       }

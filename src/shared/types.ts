@@ -104,6 +104,12 @@ export type ProjectMode = 'clips' | 'whole-video'
  */
 export type VideoType = 'auto' | 'talking-head' | 'podcast' | 'webinar' | 'product-demo'
 
+/**
+ * The kinds of moment clip selection tells apart. A small fixed set, so the
+ * list can be varied by kind and the card can label it in a word or two.
+ */
+export type ClipKind = 'story' | 'insight' | 'opinion' | 'funny' | 'emotional' | 'explainer' | 'other'
+
 /** Auto = follow the AI face track; manual = fixed focusX slider. */
 export type FramingMode = 'auto' | 'manual'
 
@@ -223,6 +229,13 @@ export interface Clip {
    * records what was proposed and why, so the clip can say what it is.
    */
   stitch?: { segments: TimeRange[]; reason: string }
+  /**
+   * What sort of moment the AI judged this to be (a story, a tip, a hot
+   * take…), used to vary the top of the list and shown on the clip card.
+   * Absent on older clips, visual-only suggestions, and when the model did
+   * not say.
+   */
+  kind?: ClipKind
   /** AI suggested boundaries (absolute seconds in the source video). */
   suggestedStart: number
   suggestedEnd: number

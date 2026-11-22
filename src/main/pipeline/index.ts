@@ -34,6 +34,7 @@ import {
 } from './ytdlp'
 import { getAnalysisCredential, getImportPreferences, getModelPreferences, missingCredentialName } from '../settings'
 import { projectDir, saveProject, updateProject } from '../projects'
+import { diversifyClipOrder } from '@shared/clipVariety'
 
 export async function createProject(videoPath: string): Promise<Project> {
   const video = await probeVideo(videoPath)
@@ -277,7 +278,11 @@ export async function analyzeProject(
       })
       clips = ranked.clips
       if (!clips.length) throw new Error('Editorial review found incomplete or misleading selections. Try a longer clip length or different instructions; the review report has been saved.')
-    } else clips = baselineClips
+    } else {
+      // Visual scoring re-sorted the list, so vary the kinds of moment at the
+      // top again on the final scores (see shared/clipVariety.ts).
+      clips = diversifyClipOrder(baselineClips)
+    }
 
     // Layouts for the top clips run in the background once the list is on
     // screen (see backgroundReframe.ts); every clip starts pending.
