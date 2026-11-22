@@ -245,7 +245,7 @@ export function detectScript(text: string): CaptionScript {
   for (const [script, count] of counts) if (!best || count > (counts.get(best) ?? 0)) best = script
   if (best) return best
   // Letters with a horn or a dot below are Vietnamese-only.
-  return /[ƠơƯưẠ-ỹ]/u.test(text) ? 'vietnamese' : 'latin'
+  return /[\u01A0\u01A1\u01AF\u01B0\u1EA0-\u1EF9]/u.test(text) ? 'vietnamese' : 'latin'
 }
 
 export function isRightToLeft(script: CaptionScript): boolean {
@@ -364,7 +364,7 @@ export function translationCssFontStack(font: TranslationFont): string {
 /** Same as the space allowance in captionLayout's width model. */
 const SPACE_WIDTH_EM = 0.26
 /** Full-width glyphs (Han, kana, Hangul, full-width forms) are one em wide. */
-const FULL_WIDTH = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}　-〿＀-￯]/u
+const FULL_WIDTH = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3000-\u303F\uFF00-\uFFEF]/u
 /**
  * Width assumed for a system fallback face we have no measurements for —
  * the same deliberately wide default captionLayout uses for unknown fonts.

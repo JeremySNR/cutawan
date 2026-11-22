@@ -8,6 +8,7 @@ import {
   ExternalLink,
   GalleryVerticalEnd,
   ImagePlus,
+  Languages,
   Loader2,
   Quote,
   ScanFace,
@@ -32,6 +33,7 @@ import { trackClip } from '@shared/editHistory'
 import { EditorialExplanation, EditorialScore } from './EditorialSummary'
 import { editorialAssessmentCurrent } from '@shared/editorialRanking'
 import TranscriptEditor from './TranscriptEditor'
+import TranslationSection from './TranslationSection'
 import { ExportButton } from './ClipsScreen'
 import SizeTargetControls from './SizeTargetControls'
 import { CAPTION_STYLES, resolveCaptionStyle } from '@shared/captionStyles'
@@ -461,6 +463,10 @@ export default function EditorScreen(): React.JSX.Element {
               />
             </div>
           )}
+        </Section>
+
+        <Section icon={Languages} title="Translation">
+          <TranslationSection project={project} clip={clip} />
         </Section>
 
         {!wholeVideo && (
