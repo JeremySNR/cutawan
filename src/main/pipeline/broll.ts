@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { BrollItem, Clip, Transcript } from '@shared/types'
-import { wordsInRange } from '@shared/captionLayout'
+import { selectedDuration, selectedRanges, selectedWords } from '@shared/clipSegments'
 import { chatJSON } from './openai'
 import { searchImage, downloadImage } from './imagesearch'
 import { projectDir } from '../projects'
@@ -81,9 +81,11 @@ export async function suggestBroll(
   clip: Clip,
   signal?: AbortSignal
 ): Promise<Array<Omit<BrollItem, 'imagePath'>>> {
-  const words = wordsInRange(transcript, clip.edit.start, clip.edit.end)
+  // Only what the clip plays: a cut or skipped stretch has nothing to illustrate.
+  const words = selectedWords(transcript, clip.edit)
   if (words.length === 0) return []
-  const clipDur = clip.edit.end - clip.edit.start
+  const ranges = selectedRanges(clip.edit)
+  const clipDur = selectedDuration(clip.edit)
   const wordList = words.map((w) => `${w.start.toFixed(2)}s ${w.text}`).join('\n')
 
   const res = await chatJSON<SuggestionResponse>(
@@ -93,7 +95,7 @@ export async function suggestBroll(
       { role: 'system', content: SYSTEM_PROMPT },
       {
         role: 'user',
-        content: `Clip runs from ${clip.edit.start.toFixed(2)}s to ${clip.edit.end.toFixed(2)}s (${clipDur.toFixed(1)}s long). Timestamps below are absolute.\n\nTranscript words:\n${wordList}`
+        content: `Clip runs from ${clip.edit.start.toFixed(2)}s to ${clip.edit.end.toFixed(2)}s (${clipDur.toFixed(1)}s of it plays). Timestamps below are absolute.\n\nTranscript words:\n${wordList}`
       }
     ],
     'broll_suggestions',
@@ -104,9 +106,12 @@ export async function suggestBroll(
   const items: Array<Omit<BrollItem, 'imagePath'>> = []
   let lastEnd = -Infinity
   for (const raw of res.items ?? []) {
-    const start = Math.max(clip.edit.start, Math.min(raw.start, clip.edit.end - 1.5))
+    // An insert sits inside one played stretch; it never straddles a cut.
+    const range = ranges.find((r) => raw.start >= r.start - 0.5 && raw.start < r.end) ?? (ranges.length === 1 ? ranges[0] : undefined)
+    if (!range) continue
+    const start = Math.max(range.start, Math.min(raw.start, range.end - 1.5))
     const duration = Math.max(1.5, Math.min(4, raw.duration))
-    const end = Math.min(clip.edit.end - 0.2, start + duration)
+    const end = Math.min(range.end - 0.2, start + duration)
     if (end - start < 1.2) continue
     if (start < lastEnd + 1) continue // enforce no overlap / breathing room
     lastEnd = end

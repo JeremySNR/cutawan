@@ -183,6 +183,12 @@ export interface Clip {
   /** Evidence route for this suggestion; not a quality or popularity guarantee. */
   discovery?: { origin: 'transcript' | 'visual'; evidenceTimes?: number[] }
   editorial?: EditorialAssessment
+  /**
+   * Present when the AI joined separate moments of the source into this
+   * clip. The join itself lives in `edit.cuts` like any other cut; this
+   * records what was proposed and why, so the clip can say what it is.
+   */
+  stitch?: { segments: TimeRange[]; reason: string }
   /** AI suggested boundaries (absolute seconds in the source video). */
   suggestedStart: number
   suggestedEnd: number
@@ -228,7 +234,14 @@ export interface Clip {
   /** See ReframeStatus. Undefined means done (older projects). */
   reframeStatus?: ReframeStatus
   /** Source interval actually analysed; trimming inside it can reuse the result. */
-  reframeAnalysis?: { start: number; end: number; version: number; revision?: number }
+  reframeAnalysis?: {
+    start: number
+    end: number
+    version: number
+    revision?: number
+    /** The stretches analysed when the trim joins distant moments; absent = all of start..end. */
+    ranges?: TimeRange[]
+  }
   /**
    * Whether the clip is mostly a talking head or a screencast/demo/slides.
    * Set during analysis; null on older projects until re-analysed.
@@ -337,6 +350,12 @@ export interface AnalyzeOptions {
   visualDiscovery?: boolean
   /** Explicit opt-in while provider behavior and quality are being evaluated. */
   editorialRanking?: boolean
+  /**
+   * Let a clip join two or three separate moments (a question and its answer
+   * with the tangent between removed, a setup and its later payoff). Every
+   * join is reviewed for coherence and for keeping the speaker's meaning.
+   */
+  stitch?: boolean
 }
 
 export type ClipLengthPreference = 'auto' | 'short' | 'medium' | 'long'

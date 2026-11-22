@@ -1,11 +1,19 @@
 import type { Clip, Transcript, VideoType } from '@shared/types'
 import { shouldAnalyzeFaces } from '@shared/videoType'
 import { markReframeComplete } from '@shared/reframe'
+import { sourceStretches } from '@shared/clipSegments'
+import { mergeStretchAnalyses } from './stretchAnalysis'
 import { analyzeClipFocus, applyFocusAnalysis, type ClipFocusAnalysis } from './faces'
 import { refineComposition } from './composition'
 import { assessClipVisuals } from './visualScore'
 import { screenTransitions } from './screenCuts'
 import type { LayoutMemory } from './layoutMemory'
+
+async function inOrder<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = []
+  for (const item of items) out.push(await run(item))
+  return out
+}
 
 /** One route for initial analysis and on-demand/legacy projects. */
 export async function analyzeClipLayout(
@@ -22,11 +30,16 @@ export async function analyzeClipLayout(
   }
   const screen = clip.visualLayout?.kind === 'screen' && videoType !== 'talking-head' &&
     clip.visualLayout.start <= clip.edit.start && clip.visualLayout.end >= clip.edit.end
+  // A clip joined from distant moments is read stretch by stretch: tracking
+  // faces through the minutes it skips would cost far more than the clip.
+  const stretches = sourceStretches(clip.edit)
   const analysis: ClipFocusAnalysis = !screen && shouldAnalyzeFaces(videoType)
-    ? await analyzeClipFocus(videoPath, clip.edit.start, clip.edit.end, signal)
+    ? mergeStretchAnalyses(await inOrder(stretches, (stretch) =>
+        analyzeClipFocus(videoPath, stretch.start, stretch.end, signal)), stretches)
     : { focusTrack: null, contentType: 'screencast' }
   if (screen) {
-    analysis.sceneTransitions = await screenTransitions(videoPath, clip.edit.start, clip.edit.end, signal)
+    analysis.sceneTransitions = (await inOrder(stretches, (stretch) =>
+      screenTransitions(videoPath, stretch.start, stretch.end, signal))).flat()
     if (analysis.sceneTransitions.length && clip.visualLayout) {
       clip.visualLayout = { ...clip.visualLayout, panels: undefined }
     }

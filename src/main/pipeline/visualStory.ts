@@ -3,6 +3,7 @@ import { readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Clip, Transcript } from '@shared/types'
 import { computeKeptSegments } from '@shared/tighten'
+import { selectedRanges } from '@shared/clipSegments'
 import { padSpeechEnd } from '@shared/sentences'
 import { chatJSON, type ChatContentPart } from './openai'
 import { extractFramesAtTimes, plannedClipFrameTimes } from './visualScore'
@@ -71,6 +72,9 @@ export async function completeVisualStory(
   apiKey: string, model: string, videoPath: string, transcript: Transcript, clip: Clip,
   videoDuration: number, maxDuration: number, signal?: AbortSignal
 ): Promise<Clip | null> {
+  // The repair extends one continuous moment into the footage after it. A
+  // clip joined from separate moments has no single "what happens next".
+  if (selectedRanges(clip.edit).length > 1) return null
   const from = clip.edit.end + .25
   const until = Math.min(videoDuration - .05, clip.edit.end + 90, clip.edit.start + 120)
   if (until - from < 3) return null

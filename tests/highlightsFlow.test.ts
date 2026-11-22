@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { detectHighlights } from '../src/main/pipeline/highlights'
 import { analyzeClipBoundaries } from '@shared/clipMetrics'
 import { transcriptSentences } from '@shared/sentences'
+import { selectedDuration, selectedRanges } from '@shared/clipSegments'
+import { clipKeptSegments } from '@shared/tighten'
 import { makeTranscript } from './helpers'
 
 /**
@@ -296,5 +298,214 @@ describe('detectHighlights on a long transcript (scripted model)', () => {
     expect(fractions).toEqual([...fractions].sort((a, b) => a - b))
     expect(fractions[fractions.length - 1]).toBe(1)
     expect(seen.some((p) => /\(\d+\/\d+\)/.test(p.message))).toBe(true)
+  })
+})
+
+describe('detectHighlights joining separate moments (scripted model)', () => {
+  // Sixty sentences of 2.7 s: sentence k starts at 2.7k.
+  const transcript = makeTranscript(
+    Array.from({ length: 60 }, (_, i) => `sentence ${i} word three four five.`),
+    { wordSec: 0.3, gapSec: 0.1, sentenceGapSec: 0.4 }
+  )
+  const sentences = transcriptSentences(transcript)
+  const VIDEO = transcript.durationSec + 5
+  const options = { prompt: '', clipLength: 'auto' as const, broll: false, hookFirst: false, videoType: 'auto' as const, stitch: true }
+  interface Request { schema: string; system: string; user: string; format: { json_schema: { schema: { properties: { clips: { items: { properties: Record<string, unknown> } } } } } } }
+  let requests: Request[]
+  let answers: Record<string, () => unknown | Response>
+
+  beforeEach(() => {
+    requests = []
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content: string }>
+        response_format: Request['format'] & { json_schema: { name: string } }
+      }
+      const schema = body.response_format.json_schema.name
+      requests.push({
+        schema, format: body.response_format,
+        system: body.messages.find((m) => m.role === 'system')?.content ?? '',
+        user: body.messages.find((m) => m.role === 'user')?.content ?? ''
+      })
+      const answer = answers[schema]
+      if (!answer) throw new Error(`unexpected schema ${schema}`)
+      const payload = answer()
+      return payload instanceof Response ? payload : chatReply(payload)
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const span = (from: number, to: number) => ({ start: sentences[from].start, end: sentences[to].end })
+  const joined = (segments: Array<{ start: number; end: number }>, title: string, shareability = 5) => ({
+    segments, join_reason: 'skips a tangent', title, hook: 'hook', summary: 'summary', payoff: 'payoff',
+    score_parts: { hook: 20, emotion: 15, value: 10, structure: 10, shareability },
+    virality_score: 0, virality_reason: 'because', hashtags: ['a']
+  })
+  const pass = (count: number) => ({
+    clips: Array.from({ length: count }, (_, index) => ({ index, seamless: true, faithful: true, reason: 'follows' }))
+  })
+
+  it('asks for parts only when joining is on', async () => {
+    answers = {
+      viral_clips: () => ({ clips: [joined([span(2, 6)], 'continuous')] }),
+      clip_endings: () => ({ endings: [] })
+    }
+    await detectHighlights('key', 'model', transcript, options, VIDEO)
+    const on = requests.find((r) => r.schema === 'viral_clips')!
+    expect(Object.keys(on.format.json_schema.schema.properties.clips.items.properties)).toContain('segments')
+    expect(on.system).toContain('Never change what a speaker meant')
+
+    requests = []
+    answers.viral_clips = () => ({ clips: [{ ...joined([], 'continuous'), segments: undefined, ...span(2, 6) }] })
+    await detectHighlights('key', 'model', transcript, { ...options, stitch: false }, VIDEO)
+    const off = requests.find((r) => r.schema === 'viral_clips')!
+    const fields = Object.keys(off.format.json_schema.schema.properties.clips.items.properties)
+    expect(fields).toContain('start')
+    expect(fields).not.toContain('segments')
+    expect(off.system).not.toContain('Joining moments')
+    // No joined clips, so no join review either.
+    expect(requests.some((r) => r.schema === 'clip_joins')).toBe(false)
+  })
+
+  it('builds a joined clip as one trim with the skipped stretch cut out', async () => {
+    answers = {
+      viral_clips: () => ({ clips: [joined([span(2, 5), span(40, 44)], 'question and answer')] }),
+      clip_joins: () => pass(1),
+      clip_endings: () => ({ endings: [] })
+    }
+    const [clip] = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    expect(clip.stitch?.reason).toBe('skips a tangent')
+    expect(clip.suggestedStart).toBeCloseTo(sentences[2].start - 0.25, 5)
+    expect(clip.suggestedEnd).toBeCloseTo(sentences[44].end + 0.25, 5)
+    const ranges = selectedRanges(clip.edit)
+    expect(ranges).toHaveLength(2)
+    // Each part lands on sentence boundaries with its own roll.
+    expect(ranges[0].end).toBeCloseTo(sentences[5].end + 0.25, 5)
+    expect(ranges[1].start).toBeCloseTo(sentences[40].start - 0.25, 5)
+    expect(selectedDuration(clip.edit)).toBeLessThan(30)
+    // What plays is exactly the two moments: nothing from the skipped lines.
+    const kept = clipKeptSegments(clip, transcript)!
+    const spoken = transcript.segments.flatMap((seg) => seg.words)
+      .filter((w) => kept.some((r) => (w.start + w.end) / 2 >= r.start && (w.start + w.end) / 2 <= r.end))
+      .map((w) => w.text).join(' ')
+    expect(spoken).toContain('sentence 2 ')
+    expect(spoken).toContain('sentence 44 ')
+    expect(spoken).not.toContain('sentence 6 ')
+    expect(spoken).not.toContain('sentence 39 ')
+  })
+
+  it('shows the join review what plays either side and what was skipped', async () => {
+    answers = {
+      viral_clips: () => ({ clips: [joined([span(2, 5), span(40, 44)], 'question and answer')] }),
+      clip_joins: () => pass(1),
+      clip_endings: () => ({ endings: [] })
+    }
+    await detectHighlights('key', 'model', transcript, options, VIDEO)
+    const review = requests.find((r) => r.schema === 'clip_joins')!
+    expect(review.user).toMatch(/Plays before: .*sentence 5 word three four five\./)
+    expect(review.user).toMatch(/Skipped: sentence 6 word/)
+    expect(review.user).toMatch(/Plays after: sentence 40 word/)
+    expect(review.user).toContain('skips a tangent')
+    // The ending review reads the clip as it plays, without the skipped lines.
+    const ending = requests.find((r) => r.schema === 'clip_endings')!
+    expect(ending.user).not.toContain('sentence 20 ')
+    expect(ending.user).toContain(`[ends ${sentences[44].end.toFixed(1)}s] ${sentences[44].text}`)
+  })
+
+  it('keeps a joined clip only on an explicit pass', async () => {
+    answers = {
+      viral_clips: () => ({
+        clips: [
+          joined([span(0, 3), span(20, 23)], 'unfaithful', 9),
+          joined([span(5, 8), span(26, 29)], 'not seamless', 8),
+          joined([span(10, 13), span(32, 35)], 'no verdict', 7),
+          joined([span(15, 18), span(38, 41)], 'passes', 6),
+          joined([span(50, 55)], 'continuous', 1)
+        ]
+      }),
+      clip_joins: () => ({
+        clips: [
+          { index: 0, seamless: true, faithful: false, reason: 'drops a qualification' },
+          { index: 1, seamless: false, faithful: true, reason: 'the answer leans on a skipped line' },
+          { index: 3, seamless: true, faithful: true, reason: 'follows' }
+        ]
+      }),
+      clip_endings: () => ({ endings: [] })
+    }
+    const clips = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    expect(clips.map((c) => c.title)).toEqual(['passes', 'continuous'])
+  })
+
+  it('drops the joined clips, and only those, when the join review cannot run', async () => {
+    answers = {
+      viral_clips: () => ({ clips: [joined([span(0, 3), span(20, 23)], 'joined'), joined([span(50, 55)], 'continuous', 1)] }),
+      clip_joins: () => new Response(JSON.stringify({ error: { message: 'bad request' } }), { status: 400 }),
+      clip_endings: () => ({ endings: [] })
+    }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const clips = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    error.mockRestore()
+    expect(clips.map((c) => c.title)).toEqual(['continuous'])
+  })
+
+  it('treats picks a breath apart as one continuous clip', async () => {
+    answers = {
+      viral_clips: () => ({ clips: [joined([span(2, 4), span(5, 8)], 'adjacent')] }),
+      clip_endings: () => ({ endings: [] })
+    }
+    const [clip] = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    expect(clip.stitch).toBeUndefined()
+    expect(clip.edit.cuts).toBeUndefined()
+    expect(clip.suggestedEnd).toBeCloseTo(sentences[8].end + 0.25, 5)
+    expect(requests.some((r) => r.schema === 'clip_joins')).toBe(false)
+  })
+
+  it('refuses a fragment, too many parts, and a join longer than the cap', async () => {
+    answers = {
+      viral_clips: () => ({
+        clips: [
+          // 0.9 s of a sentence still lands as a whole sentence (2.3 s + roll), under the three-second floor.
+          joined([span(0, 4), { start: sentences[30].start, end: sentences[30].start + 0.9 }], 'fragment'),
+          joined([span(0, 1), span(10, 11), span(20, 21), span(30, 31)], 'four parts'),
+          joined([span(0, 9), span(30, 40)], 'too long'),
+          joined([span(45, 50)], 'continuous', 1)
+        ]
+      }),
+      clip_joins: () => pass(4),
+      clip_endings: () => ({ endings: [] })
+    }
+    const clips = await detectHighlights('key', 'model', transcript, { ...options, clipLength: 'short' }, VIDEO)
+    expect(clips.map((c) => c.title)).toEqual(['continuous'])
+  })
+
+  it('moves a joined clip ending within its last part, counting only what plays', async () => {
+    answers = {
+      viral_clips: () => ({ clips: [joined([span(2, 5), span(40, 44)], 'joined')] }),
+      clip_joins: () => pass(1),
+      clip_endings: () => ({ endings: [{ index: 0, ends_with_payoff: false, better_end: sentences[46].end, reason: 'payoff is two lines on' }] })
+    }
+    const [extended] = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    expect(extended.suggestedEnd).toBeCloseTo(sentences[46].end + 0.25, 5)
+    expect(selectedRanges(extended.edit)).toHaveLength(2)
+
+    // An "ending" back before the join would turn it into a different clip.
+    answers.clip_endings = () => ({ endings: [{ index: 0, ends_with_payoff: false, better_end: sentences[38].end, reason: 'earlier' }] })
+    const [held] = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    expect(held.suggestedEnd).toBeCloseTo(sentences[44].end + 0.25, 5)
+  })
+
+  it('does not call a joined clip a duplicate of a moment it skips', async () => {
+    answers = {
+      viral_clips: () => ({
+        clips: [joined([span(2, 5), span(40, 44)], 'joined', 9), joined([span(15, 22)], 'in the gap', 5), joined([span(2, 6)], 'same opening', 1)]
+      }),
+      clip_joins: () => pass(1),
+      clip_endings: () => ({ endings: [] })
+    }
+    const clips = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    expect(clips.map((c) => c.title)).toEqual(['joined', 'in the gap'])
   })
 })
