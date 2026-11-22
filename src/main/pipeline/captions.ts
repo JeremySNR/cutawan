@@ -243,7 +243,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   if (opts.translation) {
     lines.push(...buildTranslatedAssEvents(opts.translation, {
       style, width: opts.width, height: opts.height, clipStart: opts.clipStart, positionRanges: opts.positionRanges,
-      fontSize: (emPx, styleFont) => assFontSize(emPx, styleFont ? opts.fontMetrics ?? null : null)
+      fontSize: assFontSize, styleMetrics: opts.fontMetrics ?? null
     }))
   }
 

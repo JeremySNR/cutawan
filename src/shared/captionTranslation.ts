@@ -441,7 +441,8 @@ export function translatedCardBudget(
   }
 }
 
-function packCards(tokens: Token[], budget: TranslatedCardBudget, maxTokens: number): Token[][][] {
+/** Greedy packing; `maxFor(card)` is the token cap of the card being filled. */
+function packCards(tokens: Token[], budget: TranslatedCardBudget, maxFor: (card: number) => number): Token[][][] {
   const cards: Token[][][] = []
   let lines: Token[][] = []
   let lineWidth = 0
@@ -456,7 +457,7 @@ function packCards(tokens: Token[], budget: TranslatedCardBudget, maxTokens: num
     const width = tokenWidthEm(token.text, budget.glyphWidthEm)
     const gap = token.spaced ? SPACE_WIDTH_EM : 0
     const fits = count === 0 || lineWidth + gap + width <= budget.lineWidthEm
-    if (count >= maxTokens || (!fits && lines.length >= Math.max(1, budget.maxLines))) flush()
+    if (count >= maxFor(cards.length) || (!fits && lines.length >= Math.max(1, budget.maxLines))) flush()
     if (count === 0) {
       lines.push([token])
       lineWidth = width
@@ -492,10 +493,14 @@ export function splitTranslatedSentence(
     return { ...t, text: style.uppercase ? shown.toLocaleUpperCase(languageCode || undefined) : shown }
   }).filter((t) => t.text.length > 0)
   if (!tokens.length) return []
-  let cards = packCards(tokens, budget, budget.maxTokens)
+  let cards = packCards(tokens, budget, () => budget.maxTokens)
   if (cards.length > 1 && Number.isFinite(budget.maxTokens)) {
-    const balanced = packCards(tokens, budget, Math.ceil(tokens.length / cards.length))
-    if (balanced.length === cards.length) cards = balanced
+    // Spread the tokens evenly over the same number of cards, larger first.
+    const n = cards.length
+    const base = Math.floor(tokens.length / n)
+    const extra = tokens.length % n
+    const balanced = packCards(tokens, budget, (card) => base + (card < extra ? 1 : 0))
+    if (balanced.length === n) cards = balanced
   }
   return cards.map((lines) => lines.map((line) => line.map((t, i) => (i > 0 && t.spaced ? ' ' : '') + t.text).join('')))
 }

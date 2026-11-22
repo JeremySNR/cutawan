@@ -1,4 +1,5 @@
 import type { CaptionStyle } from '@shared/captionStyles'
+import type { FontMetrics } from '../fonts'
 import { captionPositionAt, type CaptionPositionRange } from '@shared/contentRegion'
 import { translatedCaptionY, translatedOutlineWidth, type TranslatedCaptionPlan } from '@shared/captionTranslation'
 
@@ -36,18 +37,26 @@ export interface TranslatedAssContext {
   /** The script's clip start: added to event times to look up layout bands. */
   clipStart: number
   positionRanges?: CaptionPositionRange[]
-  /**
-   * CSS em size in pixels -> ASS Fontsize, given whether the face is the
-   * style's own (whose metrics captions.ts has) or a system fallback.
-   */
-  fontSize: (emPx: number, styleFont: boolean) => number
+  /** CSS em size in pixels -> ASS Fontsize for a face's metrics (captions.ts assFontSize). */
+  fontSize: (emPx: number, metrics: FontMetrics | null) => number
+  /** Metrics of the style's own font. */
+  styleMetrics: FontMetrics | null
 }
+
+/**
+ * Window-span ratio assumed for a system fallback face, whose file libass
+ * picks through the OS font provider and we never see. Measured spans of the
+ * faces SYSTEM_FALLBACKS names sit around 1.3-1.5 (Segoe UI 1.33, Noto Sans
+ * CJK 1.45); the 1.75 default for unreadable uploads made CJK fallback text
+ * overflow the frame.
+ */
+const SYSTEM_FACE_METRICS: FontMetrics = { unitsPerEm: 1000, winSpan: 1400 }
 
 /** Dialogue lines for a translated caption plan, in output time. */
 export function buildTranslatedAssEvents(plan: TranslatedCaptionPlan, ctx: TranslatedAssContext): string[] {
   const { style } = ctx
   const scale = plan.layout.fontScale / style.fontScale
-  const size = ctx.fontSize(plan.layout.fontScale * ctx.height, !plan.font.systemFallback)
+  const size = ctx.fontSize(plan.layout.fontScale * ctx.height, plan.font.systemFallback ? SYSTEM_FACE_METRICS : ctx.styleMetrics)
   const x = Math.round(ctx.width / 2)
   const align = plan.layout.anchor === 'top' ? 8 : 5
   const face = escapeAss(plan.font.family).replace(/[\\,]/g, ' ')

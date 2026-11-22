@@ -308,8 +308,10 @@ export function dubMixGraph(
   windows: DuckWindow[]
 ): { filter: string; label: string } {
   if (!voiceLabel) return { filter: `[${dubInput}:a]${DUB_FORMAT}[adub]`, label: 'adub' }
-  // Small frames give the volume envelope ~5 ms steps instead of ~21 ms.
-  const duck = ['asetnsamples=n=256:p=0', ...duckFilters(windows)].join(',')
+  // Timestamps are rebuilt from the sample count: loudnorm emits its first
+  // seconds late and stamped as one block, which shifted the envelope off
+  // the dub. Small frames give the envelope ~5 ms steps instead of ~21 ms.
+  const duck = ['asetpts=N/SR/TB', 'asetnsamples=n=256:p=0', ...duckFilters(windows)].join(',')
   return {
     filter: `[${voiceLabel}]${duck}[aducked];[${dubInput}:a]${DUB_FORMAT}[dubin];` +
       `[aducked][dubin]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[adub]`,
