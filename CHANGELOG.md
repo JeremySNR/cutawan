@@ -6,7 +6,7 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
-## [Unreleased]
+## [0.16.0] - 2026-11-22
 
 Clips you can take further: translated captions and AI voice dubs, timelines you can open in Premiere Pro, DaVinci Resolve or Final Cut Pro, a cold open, sound and music, and a check of every export. Clip finding now hears who is speaking and how the audience reacts.
 
