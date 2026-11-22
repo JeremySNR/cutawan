@@ -27,6 +27,8 @@ import { FFMPEG_PATH, probeVideo, runFfmpegWith } from './ffmpeg'
 import { timed } from './timing'
 import { loudnormFilter, measureLoudness, measureLoudnessOfRanges, normalisationMode, type LoudnessStats } from './loudness'
 import { buildAss, fontsDir } from './captions'
+import { translatedCaptionPlan } from '@shared/captionTranslation'
+import { prepareDubTrack, withDubMix } from './dub'
 import { fontMetricsForFamily } from '../fonts'
 import { mediaJobs } from './mediaJobs'
 import {
@@ -807,7 +809,8 @@ async function render(job: RenderJob): Promise<RenderResult> {
       title: clip.edit.showTitle && !compositionHidesTitle(effectiveClip) ? clip.hook || clip.title : undefined,
       fontFamily: clip.edit.captionFontFamily ?? undefined,
       brandColors: job.branding?.colors,
-      positionRanges: detailCaptionRanges(effectiveClip)
+      positionRanges: detailCaptionRanges(effectiveClip),
+      translation: translatedCaptionPlan(clip, transcript, segments, captionStyle, w / h, process.platform)
     })
     const dir = join(tmpdir(), 'cutawan')
     await mkdir(dir, { recursive: true })
@@ -842,7 +845,9 @@ async function render(job: RenderJob): Promise<RenderResult> {
   // Named up front because the graph has to reference the file; it is only
   // written if the graph comes back needing crop commands.
   const focusCommandsPath = join(tempDir, `focus-${randomUUID()}.cmd`)
-  const graph = buildFilterGraph(
+  // AI voice dub (dub.ts): one pre-mixed track, mixed over the ducked voice.
+  const dub = await prepareDubTrack(clip, transcript, segments, outputDuration, tempDir, job.signal)
+  const baseGraph = buildFilterGraph(
     effectiveClip,
     source,
     assPath,
@@ -857,6 +862,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
       audioTailSec: speechSafeFade(captionTranscript, captionStart, captionEnd)
     }
   )
+  const graph = withDubMix(baseGraph, dub, sources?.length ?? 1)
   if (graph.focusCommands) await writeFile(focusCommandsPath, graph.focusCommands, 'utf8')
 
   // Whole-video renders can produce a filter graph far larger than a
@@ -1002,6 +1008,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
       assPath,
       graph.focusCommands ? focusCommandsPath : null,
       filterScriptPath,
+      dub?.trackPath ?? null,
       ...(passLogPrefix ? passLogFiles(passLogPrefix) : [])
     ]
     await Promise.all(
@@ -1010,7 +1017,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
   }
   const bytes = (await stat(job.outputPath)).size
   const exported = await probeVideo(job.outputPath)
-  if (exported.width !== (plan?.width ?? w) || exported.height !== (plan?.height ?? h) || exported.hasAudio !== source.hasAudio ||
+  if (exported.width !== (plan?.width ?? w) || exported.height !== (plan?.height ?? h) || exported.hasAudio !== (graph.audioLabel !== null) ||
     Math.abs(exported.durationSec - outputDuration) > Math.max(.25, 2 / Math.max(1, source.fps))) {
     throw new Error('Export validation failed: unexpected dimensions, duration or audio stream.')
   }

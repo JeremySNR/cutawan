@@ -22,6 +22,8 @@ import {
 import { applyPreviewVideoFrame } from '../lib/previewVideo'
 import { usePreviewBus } from '../lib/previewBus'
 import { useStore } from '../store'
+import { showsOriginalCaptions } from '@shared/captionTranslation'
+import { TranslatedCaptionOverlay, useDubPlayback } from './TranslatedCaptions'
 
 /**
  * Live preview that mimics the exported result: bounded playback of the clip
@@ -193,6 +195,7 @@ export default function PreviewPlayer({
   const timeMap = useMemo(() => (keptSegments ? new TimeMap(keptSegments) : null), [keptSegments])
   const outputDuration = timeMap?.outputDuration ?? duration
   const outputTime = timeMap ? timeMap.toOutput(time) : Math.max(0, time - start)
+  useDubPlayback(videoRef, project, clip, keptSegments, outputTime, playing)
 
   // Mirrors the export's auto-zoom plan (same shared generator), including the
   // trim the export has to make when a plan outgrows one ffmpeg expression.
@@ -324,7 +327,7 @@ export default function PreviewPlayer({
         <canvas ref={overviewRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 hidden w-full" />
         <BrollOverlay clip={clip} time={time} />
         <WatermarkOverlay />
-        {clip.edit.captionsEnabled && project.transcript && (
+        {clip.edit.captionsEnabled && project.transcript && showsOriginalCaptions(clip) && (
           <CaptionOverlay
             transcript={project.transcript}
             clip={clip}
@@ -332,6 +335,8 @@ export default function PreviewPlayer({
             aspectRatio={aspectStyle}
           />
         )}
+        <TranslatedCaptionOverlay project={project} clip={clip} segments={keptSegments} outputTime={outputTime} sourceTime={time} aspectRatio={aspectStyle} />
+
         {clip.edit.showTitle && !compositionHidesTitle(clip) && (clip.hook || clip.title) && time - start < Math.min(4, duration) && (
           <HookOverlay clip={clip} />
         )}

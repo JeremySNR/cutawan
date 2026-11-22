@@ -37,14 +37,18 @@ import { renderClip } from './pipeline/render'
 import { ensureClipReframe } from './pipeline/reframe'
 import { cancelBackgroundReframes, startBackgroundReframes } from './pipeline/backgroundReframe'
 import { generateSocialCaption } from './pipeline/socialCaption'
+import { translateClip, type TranslateOptions } from './pipeline/translate'
+import { dubClip, estimateDub, type DubVoiceChoice } from './pipeline/dub'
+import { DUB_VOICES, dubSupport } from '@shared/dubPlan'
 import { addCustomFonts, listCustomFonts, removeCustomFont, renderFontsDir } from './fonts'
 import { clearImportCookiesFile, installImportCookiesFile } from './cookies'
 import { checkForUpdates, downloadUpdate, installUpdate, updateFromSource, getUpdateDownloadState, onUpdateDownloadState, openUpdateInstaller, cancelUpdateDownload } from './updates'
 import { UpdateActivity } from './updateActivity'
 import { isMediaPathAllowed } from './mediaAccess'
 import { sanitizeFileName, uniqueOutputPath } from './exportPath'
-import { deleteProject, listProjects, loadProject, updateProject } from './projects'
+import { deleteProject, listProjects, loadProject, projectDir, updateProject } from './projects'
 import {
+  getAiProvider,
   getAnalysisCredential,
   getBrandingSettings,
   getBrandVoiceSettings,
@@ -455,6 +459,57 @@ export function registerIpcHandlers(): void {
       const target = fresh.clips.find((c) => c.id === clipId)
       if (!target) throw new Error('Clip not found')
       target.caption = caption
+    })
+  })
+
+  // --- Caption translation and AI voice dub (translate.ts, dub.ts) -------
+  handle('clip:translate', async (_e, projectId: string, clipId: string, options: TranslateOptions) => {
+    const project = await loadProject(projectId)
+    const clip = project.clips.find((c) => c.id === clipId)
+    if (!clip) throw new Error('Clip not found')
+    if (!project.transcript) throw new Error('This project has no transcript to translate.')
+    const apiKey = getAnalysisCredential()
+    if (!apiKey) throw new Error(`Add your ${missingCredentialName()} in Settings first.`)
+    const translation = await translateClip(apiKey, getModelPreferences().analysisModel, clip, project.transcript, options)
+    // Graft under the lock, like the post caption: edits made meanwhile stay.
+    return updateProject(projectId, (fresh) => {
+      const target = fresh.clips.find((c) => c.id === clipId)
+      if (!target) throw new Error('Clip not found')
+      target.translation = translation
+    })
+  })
+
+  const dubChoice = (choice: { model: string; voice: string }): DubVoiceChoice => {
+    const support = dubSupport(getAiProvider())
+    if (!support.available || !support.provider) throw new Error(support.reason ?? 'AI voice dubbing is not available on this AI connection.')
+    const model = support.models.find((m) => m.id === choice.model) ?? support.models[0]
+    const voice = DUB_VOICES.some((v) => v.id === choice.voice) ? choice.voice : DUB_VOICES[0].id
+    return { provider: support.provider, model, voice }
+  }
+
+  handle('clip:dubEstimate', async (_e, projectId: string, clipId: string, choice: { model: string; voice: string }) => {
+    const project = await loadProject(projectId)
+    const clip = project.clips.find((c) => c.id === clipId)
+    if (!clip) throw new Error('Clip not found')
+    return estimateDub(clip, project.transcript, join(projectDir(projectId), 'dub-cache'), dubChoice(choice))
+  })
+
+  handle('clip:dub', async (event, projectId: string, clipId: string, choice: { model: string; voice: string }) => {
+    const project = await loadProject(projectId)
+    const clip = project.clips.find((c) => c.id === clipId)
+    if (!clip) throw new Error('Clip not found')
+    const resolved = dubChoice(choice)
+    const apiKey = getAnalysisCredential()
+    if (!apiKey) throw new Error(`Add your ${missingCredentialName()} in Settings first.`)
+    const dub = await dubClip(apiKey, clip, project.transcript, join(projectDir(projectId), 'dub-cache'), resolved, {
+      onProgress: (done, total) => {
+        if (!event.sender.isDestroyed()) event.sender.send('dub:progress', { clipId, done, total })
+      }
+    })
+    return updateProject(projectId, (fresh) => {
+      const target = fresh.clips.find((c) => c.id === clipId)
+      if (!target) throw new Error('Clip not found')
+      target.dub = dub
     })
   })
 

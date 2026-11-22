@@ -64,7 +64,9 @@ const MIME_TYPES: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
   '.webp': 'image/webp',
-  '.gif': 'image/gif'
+  '.gif': 'image/gif',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav'
 }
 
 function contentType(path: string): string {
