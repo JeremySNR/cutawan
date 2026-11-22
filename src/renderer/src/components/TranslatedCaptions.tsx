@@ -114,10 +114,14 @@ export function useDubPlayback(
   const cues = useMemo(() => planDubCues(clip, project.transcript, segments, undefined, outputOffset), [clip, project.transcript, segments, outputOffset])
   const windows = useMemo(() => duckWindows(cues), [cues])
   const players = useRef<HTMLAudioElement[]>([])
+  // The cues are replanned on any clip edit (typing the hook text, say);
+  // the audio elements follow only the files they play, so an unrelated
+  // edit does not cut off the line that is speaking.
+  const audioKey = JSON.stringify(cues.map((cue) => cue.audioPath))
 
   useEffect(() => {
-    const created = cues.map((cue) => {
-      const audio = new Audio(window.cutawan.mediaUrl(cue.audioPath))
+    const created = (JSON.parse(audioKey) as string[]).map((audioPath) => {
+      const audio = new Audio(window.cutawan.mediaUrl(audioPath))
       audio.preload = 'auto'
       audio.preservesPitch = true
       return audio
@@ -131,7 +135,7 @@ export function useDubPlayback(
       }
       players.current = []
     }
-  }, [cues])
+  }, [audioKey])
 
   useEffect(() => {
     const video = videoRef.current
