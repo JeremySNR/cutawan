@@ -56,6 +56,14 @@ describe('landTranslation', () => {
     expect(continued.map((l) => l.text)).toEqual(['L11', 'L12', 'L13', 'L14'])
   })
 
+  it('matches by number when the numbers are in range but out of order or repeated', () => {
+    const swapped = landTranslation(sentences, { lines: [2, 1, 4, 3].map((n) => ({ n, text: `L${n}` })) })
+    expect(swapped.map((l) => l.text)).toEqual(['L1', 'L2', 'L3', 'L4'])
+    const repeated = landTranslation(sentences, { lines: [1, 3, 3, 4].map((n, i) => ({ n, text: `L${i}` })) })
+    expect(repeated.map((l) => l.text)).toEqual(['L0', SENTENCES[1], 'L1', 'L3'])
+    expect(repeated.map((l) => Boolean(l.untranslated))).toEqual([false, true, false, false])
+  })
+
   it('keeps the first of duplicated numbers, accepts numeric strings and strips an echoed number', () => {
     const lines = landTranslation(sentences, {
       lines: [{ n: '1', text: '1. Uno' }, { n: 1, text: 'Otra vez' }, { n: 2, text: 'Dos' }]

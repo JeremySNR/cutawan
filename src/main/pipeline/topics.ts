@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { pruneDirectory } from './analysisCache'
 import type { Sentence } from '@shared/sentences'
 
 /**
@@ -199,6 +200,8 @@ export function hierarchicalTopics(sentences: Sentence[], vectors: Float32Array[
 
 /** A cached boundary file larger than this is not read (a two-hour transcript's is a few KB). */
 const MAX_CACHE_BYTES = 1024 * 1024
+/** Topic files kept per project (one per transcript and embedding model). */
+const TOPICS_CACHE_ENTRIES = 8
 
 /**
  * The cache key: boundaries depend on the sentence texts, their count, the
@@ -243,6 +246,9 @@ async function writeCachedTopics(dir: string, path: string, key: string, topics:
     await writeFile(temporary, JSON.stringify({ key, topics }), { signal })
     signal?.throwIfAborted()
     await rename(temporary, path)
+    // The outline cache prunes only its own files; these would otherwise
+    // pile up with every transcript edit or embedding model change.
+    await pruneDirectory(dir, { maxEntries: TOPICS_CACHE_ENTRIES, match: name => name.startsWith('topics-') })
   } catch (err) {
     signal?.throwIfAborted()
     // A cache that cannot be written costs the next run an embedding pass, nothing more.

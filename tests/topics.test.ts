@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -200,6 +200,21 @@ describe('detectTopics', () => {
     // Another model, or other sentences, is another key.
     expect(topicsCacheKey(sentences, 'fake-2')).not.toBe(topicsCacheKey(sentences, 'fake-1'))
     expect(topicsCacheKey(sentences.slice(1), 'fake-1')).not.toBe(topicsCacheKey(sentences, 'fake-1'))
+  })
+
+  it('prunes old topic files but leaves the outline cache alone', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'cutawan-topics-'))
+    const old = new Date(Date.now() - 86_400_000)
+    for (let i = 0; i < 12; i++) {
+      await writeFile(join(dir, `topics-old${i}.json`), '{}')
+      await utimes(join(dir, `topics-old${i}.json`), old, old)
+    }
+    await writeFile(join(dir, 'outline-a.json'), '{}')
+    await detectTopics({ sentences, embedder: fakeEmbedder(), cacheDir: dir })
+    const names = await readdir(dir)
+    expect(names.filter((n) => n.startsWith('topics-'))).toHaveLength(8)
+    expect(names).toContain(`topics-${topicsCacheKey(sentences, 'fake-1')}.json`)
+    expect(names).toContain('outline-a.json')
   })
 
   it('ignores a damaged cache file and rebuilds it', async () => {

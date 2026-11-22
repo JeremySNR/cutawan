@@ -15,7 +15,9 @@ export class InferenceClient {
   constructor(
     private readonly workerPath: string,
     private readonly execArgv: string[] = [],
-    private readonly timeoutMs = 120_000
+    private readonly timeoutMs = 120_000,
+    /** What stops when the child fails, for the error the user sees. */
+    private readonly feature = 'Automatic framing'
   ) {}
 
   run(modelPath: string, inputs: Record<string, TensorData>, signal?: AbortSignal,
@@ -76,7 +78,7 @@ export class InferenceClient {
         else resolve(outputs!)
       }
       const failed = (error: Error): void => {
-        this.failure = new Error(`Automatic framing stopped because the inference process failed. Restart Cutawan to retry. ${error.message}`)
+        this.failure = new Error(`${this.feature} stopped because the inference process failed. Restart Cutawan to retry. ${error.message}`)
         this.close()
         finish(this.failure)
       }
@@ -115,11 +117,12 @@ const compiledWorker = join(__dirname, 'inferenceWorker.js')
  * failure there (which latches a client until restart) cannot take down
  * automatic framing, and so they can run alongside the shared one.
  */
-export function createInferenceClient(timeoutMs?: number): InferenceClient {
+export function createInferenceClient(timeoutMs?: number, feature?: string): InferenceClient {
   const client = new InferenceClient(
     existsSync(compiledWorker) ? compiledWorker : join(__dirname, 'worker.ts'),
     process.versions.electron ? [] : process.execArgv,
-    timeoutMs
+    timeoutMs,
+    feature
   )
   process.once('exit', () => client.close())
   return client

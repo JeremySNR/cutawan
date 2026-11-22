@@ -39,6 +39,7 @@ vi.mock('../src/main/pipeline/audioAnalysis', async (importOriginal) => {
 import { ensureTranscript } from '../src/main/pipeline/projectTranscript'
 import { analyseSourceAudio } from '../src/main/pipeline/audioAnalysis'
 import { speakerModelPath } from '../src/main/pipeline/speakerModel'
+import { detectSpeech } from '../src/main/pipeline/vad'
 import { loadProject, projectDir, saveProject } from '../src/main/projects'
 import { planWindows } from '../src/main/pipeline/speakerTurns'
 
@@ -116,6 +117,22 @@ describe('fresh transcription', () => {
     expect(vi.mocked(analyseSourceAudio).mock.calls[0][0].diarize).toBeUndefined()
   }, 30_000)
 
+  it('keeps the reactions when waiting for the speaker model fails', async () => {
+    vi.mocked(speakerModelPath).mockImplementationOnce(() => Promise.reject(new Error('download cancelled elsewhere')))
+    const project = await makeProject(null)
+    const transcript = await ensureTranscript(project, mocks.root, options, () => {})
+    expect(transcript.reactions).toHaveLength(3)
+    expect(transcript.speakerTurns).toBeUndefined()
+  }, 30_000)
+
+  it('does not fetch the speaker model for a source without speech', async () => {
+    vi.mocked(speakerModelPath).mockClear()
+    vi.mocked(detectSpeech).mockResolvedValueOnce([])
+    const project = await makeProject(null)
+    await ensureTranscript(project, mocks.root, options, () => {})
+    expect(speakerModelPath).not.toHaveBeenCalled()
+  }, 30_000)
+
   it('keeps the transcript when the audio analysis fails', async () => {
     mocks.modelPath = 'model.onnx'
     vi.mocked(analyseSourceAudio).mockRejectedValueOnce(new Error('inference process crashed'))
@@ -184,6 +201,18 @@ describe('backfill for older projects', () => {
     const later = await ensureTranscript(await loadProject(project.id), mocks.root, options, () => {})
     expect(later.speakerTurns?.map(t => t.speaker)).toEqual([0, 1, 0, 0]) // the last two split by a 4 s pause
     expect((await loadProject(project.id)).transcript?.speakerTurns).toEqual(later.speakerTurns)
+  })
+
+  it('does not decode the source again after the analysis failed for it', async () => {
+    mocks.modelPath = 'model.onnx'
+    vi.mocked(analyseSourceAudio).mockRejectedValueOnce(new Error('inference process crashed'))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const project = await makeProject(older())
+    await ensureTranscript(project, mocks.root, options, () => {})
+    errors.mockRestore()
+    expect(analyseSourceAudio).toHaveBeenCalledTimes(1)
+    await ensureTranscript(await loadProject(project.id), mocks.root, options, () => {})
+    expect(analyseSourceAudio).toHaveBeenCalledTimes(1)
   })
 
   it('leaves a project without audio alone', async () => {

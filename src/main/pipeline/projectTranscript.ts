@@ -7,7 +7,7 @@ import { transcribeChunks } from './transcribe'
 import { annotateEnergy } from './energy'
 import { detectSpeech, vadAvailable } from './vad'
 import { timed } from './timing'
-import { analyseSourceAudio, finishAudioAnalysis, type AudioAnalysisRaw } from './audioAnalysis'
+import { analyseSourceAudio, finishAudioAnalysis, type AudioAnalysisRaw, type AudioAnalysisRequest } from './audioAnalysis'
 import { speakerModelPath } from './speakerModel'
 import { projectDir, updateProject } from '../projects'
 
@@ -76,9 +76,10 @@ export async function ensureTranscript(
     if (project.video.hasAudio) {
       // Older projects: add reactions and speaker turns once.
       const saved = project.transcript
+      const tried = await analysedBefore(project, saved)
       const want = {
-        reactions: !saved.reactions,
-        speakers: !saved.speakerTurns && !(await diarizedBefore(project, saved))
+        reactions: !saved.reactions && !tried.reactions,
+        speakers: !saved.speakerTurns && !tried.speakers
       }
       if (want.reactions || want.speakers) {
         onProgress({ stage: 'transcribe', progress: at(1), message: ANALYSIS_MESSAGE })
@@ -207,17 +208,22 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => { setTimeo
  * must not hold up the stage); it carries on and serves the next run.
  */
 function speakerModelBefore(deadline: Promise<unknown>, signal?: AbortSignal): Promise<string | null> {
-  const model = speakerModelPath(signal)
-  model.catch(() => undefined)
+  // `signal` abandons only this wait; the shared download carries on. Any
+  // other rejection is a missing model, never a failed analysis.
+  const model = speakerModelPath(signal).catch((error: unknown) => {
+    if (signal?.aborted) throw error
+    return null
+  })
   return Promise.race([model, deadline.then(() => null)])
 }
 
 /**
  * Reactions and/or speaker turns measured over the whole source; null when
- * they could not run. Never fails the stage except on cancellation. The
- * speaker model may be downloaded on first use (see speakerModel.ts) and is
- * awaited until `modelDeadline`; without it, or without voice activity,
- * diarization is skipped this time.
+ * there was nothing to run, and only failure flags when the analysis
+ * failed. Never fails the stage except on cancellation. The speaker model
+ * may be downloaded on first use (see speakerModel.ts) and is awaited until
+ * `modelDeadline`; without it, or without voice activity, diarization is
+ * skipped this time.
  */
 export async function runAudioAnalysis(
   project: Project,
@@ -227,9 +233,13 @@ export async function runAudioAnalysis(
   signal?: AbortSignal,
   modelDeadline: Promise<unknown> = Promise.resolve()
 ): Promise<AudioAnalysisRaw | null> {
+  let diarize: AudioAnalysisRequest['diarize']
   try {
-    const [regions, modelPath] = await Promise.all([speech, want.speakers ? speakerModelBefore(modelDeadline, signal) : null])
-    const diarize = want.speakers && modelPath && regions?.length ? { speech: regions, modelPath } : undefined
+    const regions = await speech
+    // Only a source with speech needs the model: a silent or music-only one
+    // never starts the download.
+    const modelPath = want.speakers && regions?.length ? await speakerModelBefore(modelDeadline, signal) : null
+    diarize = modelPath && regions?.length ? { speech: regions, modelPath } : undefined
     if (!want.reactions && !diarize) return null
     return await timed('audio-analysis', () => analyseSourceAudio({
       videoPath: project.video.path,
@@ -240,7 +250,9 @@ export async function runAudioAnalysis(
   } catch (error) {
     if (signal?.aborted) throw error
     console.error('Audio analysis failed; the transcript is kept without it:', error)
-    return null
+    // Recorded so the backfill does not decode the whole source again on
+    // every regeneration.
+    return { ...(want.reactions ? { reactionsFailed: true } : {}), ...(diarize ? { speakersFailed: true } : {}) }
   }
 }
 
@@ -249,49 +261,72 @@ async function saveAudioAnalysis(project: Project, transcript: Transcript, raw: 
   if (!raw) return
   const result = finishAudioAnalysis(raw, transcript)
   const turns = result.speakerTurns?.length ? result.speakerTurns : undefined
-  if (!result.reactions && !turns) {
-    if (result.speakerTurns) await markDiarized(project, transcript)
-    return
+  if (result.reactions || turns) {
+    if (result.reactions) transcript.reactions = result.reactions
+    if (turns) transcript.speakerTurns = turns
+    await updateProject(project.id, (p) => {
+      // A source replaced meanwhile has a transcript of its own.
+      if (!p.transcript || p.video.path !== project.video.path || (p.sourceRevision ?? 0) !== (project.sourceRevision ?? 0)) return
+      if (result.reactions) p.transcript.reactions = result.reactions
+      if (turns) p.transcript.speakerTurns = turns
+    })
   }
-  if (result.reactions) transcript.reactions = result.reactions
-  if (turns) transcript.speakerTurns = turns
-  await updateProject(project.id, (p) => {
-    // A source replaced meanwhile has a transcript of its own.
-    if (!p.transcript || p.video.path !== project.video.path || (p.sourceRevision ?? 0) !== (project.sourceRevision ?? 0)) return
-    if (result.reactions) p.transcript.reactions = result.reactions
-    if (turns) p.transcript.speakerTurns = turns
-  })
-  if (result.speakerTurns) await markDiarized(project, transcript)
+  // A failed analysis is recorded as tried, like a single voice, so the
+  // backfill does not decode the whole source again on every regeneration.
+  const speakers = !!result.speakerTurns || !!raw.speakersFailed
+  const reactions = !result.reactions && (!!raw.reactionsFailed || !!raw.reactionFeatures)
+  if (speakers || reactions) await markAnalysed(project, transcript, { speakers, reactions })
 }
 
 /**
  * A single voice leaves `speakerTurns` absent, which alone cannot tell
- * "diarized, one speaker" from "never diarized". A small marker beside
- * project.json records the former so the backfill does not re-run the
- * model on every regeneration of a talking-head video. Bump the version
- * when diarization improves enough to be worth re-running.
+ * "diarized, one speaker" from "never diarized"; a failed analysis leaves
+ * its field absent too. A small marker beside project.json records both,
+ * keyed to the source, so the backfill does not re-run the model or decode
+ * the source on every regeneration of a talking-head video or a damaged
+ * file. Bump the version when the analyses improve enough to be worth
+ * re-running.
  */
-const DIARIZATION_MARKER = 'audio-analysis.json'
-const DIARIZATION_VERSION = 1
+const ANALYSIS_MARKER = 'audio-analysis.json'
+const ANALYSIS_VERSION = 1
+
+interface AnalysisMarker {
+  version?: number
+  /** Source key diarization ran on (or failed on). */
+  diarized?: string
+  /** Source key reaction detection failed on. */
+  reactionsTried?: string
+}
 
 function sourceKey(project: Project, transcript: Transcript): string {
   return JSON.stringify([project.video.path, project.sourceRevision ?? 0, transcript.durationSec, transcript.segments.length])
 }
 
-async function diarizedBefore(project: Project, transcript: Transcript): Promise<boolean> {
+async function readMarker(project: Project): Promise<AnalysisMarker> {
   try {
-    const marker = JSON.parse(await readFile(join(projectDir(project.id), DIARIZATION_MARKER), 'utf8')) as { version?: number; diarized?: string }
-    return marker.version === DIARIZATION_VERSION && marker.diarized === sourceKey(project, transcript)
+    const marker = JSON.parse(await readFile(join(projectDir(project.id), ANALYSIS_MARKER), 'utf8')) as AnalysisMarker
+    return marker.version === ANALYSIS_VERSION ? marker : {}
   } catch {
-    return false
+    return {}
   }
 }
 
-async function markDiarized(project: Project, transcript: Transcript): Promise<void> {
+async function analysedBefore(project: Project, transcript: Transcript): Promise<{ speakers: boolean; reactions: boolean }> {
+  const marker = await readMarker(project)
+  const key = sourceKey(project, transcript)
+  return { speakers: marker.diarized === key, reactions: marker.reactionsTried === key }
+}
+
+async function markAnalysed(project: Project, transcript: Transcript, done: { speakers: boolean; reactions: boolean }): Promise<void> {
+  const key = sourceKey(project, transcript)
+  const marker = await readMarker(project)
   try {
-    await writeFile(join(projectDir(project.id), DIARIZATION_MARKER),
-      JSON.stringify({ version: DIARIZATION_VERSION, diarized: sourceKey(project, transcript) }))
+    await writeFile(join(projectDir(project.id), ANALYSIS_MARKER), JSON.stringify({
+      version: ANALYSIS_VERSION,
+      ...(done.speakers ? { diarized: key } : marker.diarized ? { diarized: marker.diarized } : {}),
+      ...(done.reactions ? { reactionsTried: key } : marker.reactionsTried ? { reactionsTried: marker.reactionsTried } : {})
+    }))
   } catch (error) {
-    console.warn('Could not record diarization for this project:', error)
+    console.warn('Could not record the audio analysis for this project:', error)
   }
 }
