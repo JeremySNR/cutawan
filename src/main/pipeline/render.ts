@@ -320,9 +320,45 @@ function reframeGraph(
 }
 
 /**
+ * Fade applied to the audio either side of every internal cut. Two pieces
+ * butted together jump from one waveform to another mid-cycle: a click on
+ * room tone or music, and a step in level wherever a filler word came out.
+ * 15 ms of raised-cosine fade (a 720-sample ramp at 48 kHz) takes the jump
+ * to zero without being heard as a dip — the out-and-in pair is 30 ms,
+ * under the ~50 ms at which a break in sound starts to read as a pause —
+ * and stays inside the breathing room pause removal leaves around speech.
+ * The fades sit inside each piece, so no duration changes: captions, zoom
+ * and focus are timed against the exact sum of the kept segments.
+ */
+export const CUT_FADE_SEC = 0.015
+/** A short piece is faded over at most this share of its length at each end. */
+const CUT_FADE_MAX_SHARE = 0.25
+
+/**
+ * The per-piece audio fade filters for the piece `i` of `segments`, lasting
+ * `duration` seconds once trimmed: a fade in where it follows a cut and a
+ * fade out where one follows it. Never at the clip's own start or end (the
+ * end has its own fade, see audioChain), and never between pieces that touch
+ * in the source. Exported for tests.
+ */
+export function cutFades(segments: KeptSegment[], i: number, duration: number): string {
+  const fade = Math.min(CUT_FADE_SEC, duration * CUT_FADE_MAX_SHARE)
+  if (fade < 0.001) return ''
+  const d = fade.toFixed(4)
+  const filters: string[] = []
+  const previous = segments[i - 1], next = segments[i + 1]
+  if (previous && segments[i].start - previous.end > 0.001) filters.push(`afade=t=in:d=${d}:curve=hsin`)
+  if (next && next.start - segments[i].end > 0.001) {
+    filters.push(`afade=t=out:st=${Math.max(0, duration - fade).toFixed(4)}:d=${d}:curve=hsin`)
+  }
+  return filters.map((f) => `,${f}`).join('')
+}
+
+/**
  * Trim+concat prefix for tightened clips: cuts the kept segments out of the
  * (already -ss seeked, so clip-relative) input and concatenates them.
- * Produces [vcat] and, when audio is present, [acat].
+ * Produces [vcat] and, when audio is present, [acat]. Each audio piece is
+ * faded in and out at the cuts (cutFades), never across them.
  *
  * A clip joined from distant moments is opened once per moment (`sources`,
  * one input each, in order), so the minutes between them are never decoded;
@@ -340,7 +376,8 @@ function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: bool
     parts.push(`[${input}:v]trim=start=${s}:end=${e},setpts=PTS-STARTPTS[vs${i}]`)
     vLabels.push(`[vs${i}]`)
     if (hasAudio) {
-      parts.push(`[${input}:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS[as${i}]`)
+      const fades = cutFades(segments, i, Number(e) - Number(s))
+      parts.push(`[${input}:a]atrim=start=${s}:end=${e},asetpts=PTS-STARTPTS${fades}[as${i}]`)
       aLabels.push(`[as${i}]`)
     }
   })

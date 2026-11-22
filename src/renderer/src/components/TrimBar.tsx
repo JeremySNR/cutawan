@@ -2,14 +2,19 @@ import { useCallback, useRef } from 'react'
 import type { TimelineData, TimeRange } from '@shared/types'
 import type { TimelineScale } from '@shared/timelineScale'
 
-/** A span the timeline marks: removed by pause removal, restored by the user, or cut. */
-export interface TimelineMark { range: TimeRange; kind: 'auto' | 'restored' | 'cut' }
+/**
+ * A span the timeline marks: removed by pause removal, restored by the user,
+ * kept automatically because something happens in it, or cut.
+ */
+export interface TimelineMark { range: TimeRange; kind: 'auto' | 'restored' | 'active' | 'cut' }
 
 const MARK_STYLE: Record<TimelineMark['kind'], { className: string; title: string }> = {
   auto: { className: 'bg-[repeating-linear-gradient(135deg,rgba(0,0,0,.7)_0_4px,rgba(255,255,255,.18)_4px_7px)]',
     title: 'Pause removed automatically — click to keep it' },
   restored: { className: 'border-x-2 border-dashed border-sky-300/80 bg-sky-300/10',
     title: 'Pause kept — click to remove it again' },
+  active: { className: 'border-x-2 border-dashed border-emerald-300/80 bg-emerald-300/10',
+    title: 'Pause kept automatically: something moves or sounds in it — click to remove it' },
   cut: { className: 'bg-[repeating-linear-gradient(135deg,rgba(127,29,29,.8)_0_4px,rgba(248,113,113,.35)_4px_7px)]',
     title: 'Cut — click to put it back, or drag an edge to move it' }
 }

@@ -7,6 +7,7 @@ import { analyzeClipFocus, applyFocusAnalysis, type ClipFocusAnalysis } from './
 import { refineComposition } from './composition'
 import { assessClipVisuals } from './visualScore'
 import { screenTransitions } from './screenCuts'
+import { refreshGapActivity } from './gapActivity'
 import type { LayoutMemory } from './layoutMemory'
 
 async function inOrder<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
@@ -44,6 +45,10 @@ export async function analyzeClipLayout(
       clip.visualLayout = { ...clip.visualLayout, panels: undefined }
     }
   }
+  // Which silent pauses have something happening in them. Local decoding
+  // only, so it runs for every video type, with or without an API key or
+  // face analysis, and before composition so the AI sees the same edit.
+  await refreshGapActivity(videoPath, clip, transcript, signal)
   if (apiKey && videoType !== 'talking-head') {
     await refineComposition(apiKey, model, videoPath, clip, analysis.sceneCuts, signal,
       analysis.focusTrack, analysis.sceneTransitions, transcript, memory)

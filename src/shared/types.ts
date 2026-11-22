@@ -118,6 +118,12 @@ export interface ClipEditState {
   cuts?: TimeRange[]
   /** Source ranges automatic pause removal took out that the user put back. */
   restored?: TimeRange[]
+  /**
+   * Pauses kept automatically because something happens in them (see
+   * `Clip.gapActivity`) that the user chose to remove anyway. Any active
+   * range overlapping one of these is not protected.
+   */
+  removedActive?: TimeRange[]
   /** Razor points (source seconds) dividing the timeline into selectable pieces. */
   splits?: number[]
   /** Explicit framing choice, even when its values match generated defaults. */
@@ -211,6 +217,24 @@ export interface Clip {
   visualStory?: {
     protectedRanges: Array<{ start: number; end: number }>
     reason: string
+  }
+  /**
+   * Silent pauses with something happening in them — sustained picture
+   * motion, or non-speech sound close to speech level — measured during
+   * framing analysis (main/pipeline/gapActivity.ts). `active` is kept by
+   * pause removal like `visualStory.protectedRanges`. Source seconds, so a
+   * later trim change leaves them valid; gaps that only exist under a new
+   * trim are simply unmeasured.
+   */
+  gapActivity?: {
+    version: number
+    /** The trim the measurement was taken for. */
+    start: number
+    end: number
+    /** Every gap that was measured, active or not. */
+    measured: TimeRange[]
+    /** The parts of measured gaps to keep. */
+    active: TimeRange[]
   }
   /** Source-frame review; conservative layout constraints for the inspected interval. */
   visualLayout?: {

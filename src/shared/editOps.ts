@@ -1,5 +1,5 @@
-import type { Clip, ClipEditState, TimeRange, Transcript } from './types'
-import { editedClipDuration, normalizeRanges } from './tighten'
+import type { ClipEditState, TimeRange, Transcript } from './types'
+import { editedClipDuration, normalizeRanges, type TightenClip } from './tighten'
 
 /**
  * Pure timeline edits shared by keyboard shortcuts, the timeline and the
@@ -78,6 +78,30 @@ export function toggleRestored(edit: ClipEditState, pause: TimeRange): ClipEditS
 }
 
 /**
+ * Remove a pause that was kept automatically for its activity (see
+ * `Clip.gapActivity`), or keep it again. The range only has to overlap the
+ * active range: re-measuring may move its edges a little.
+ */
+export function toggleActiveGap(edit: ClipEditState, pause: TimeRange): ClipEditState {
+  const removed = edit.removedActive ?? []
+  const overlapping = removed.filter(r => r.start < pause.end && r.end > pause.start)
+  return { ...edit, removedActive: overlapping.length
+    ? removed.filter(r => !overlapping.includes(r))
+    : [...removed, { start: pause.start, end: pause.end }] }
+}
+
+/**
+ * Clicking a pause that pause removal takes out. One the user removed
+ * despite its activity goes back to being kept automatically, so the two
+ * clicks are an exact toggle; any other pause is restored as before.
+ */
+export function toggleRemovedPause(edit: ClipEditState, pause: TimeRange): ClipEditState {
+  return (edit.removedActive ?? []).some(r => r.start < pause.end && r.end > pause.start)
+    ? toggleActiveGap(edit, pause)
+    : toggleRestored(edit, pause)
+}
+
+/**
  * The source range covering transcript words [first, last] (indices into the
  * clip's words), with each edge halfway into the neighbouring gap so the cut
  * falls between words rather than on them.
@@ -107,6 +131,6 @@ export function setTrimEdge(edit: ClipEditState, which: 'start' | 'end', t: numb
 }
 
 /** A cut must leave something to play: never less than MIN_CLIP_SEC. */
-export function keepsPlayback(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript | null): boolean {
+export function keepsPlayback(clip: TightenClip, transcript: Transcript | null): boolean {
   return editedClipDuration(clip, transcript) >= MIN_CLIP_SEC
 }

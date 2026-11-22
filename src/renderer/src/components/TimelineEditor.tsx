@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Redo2, Scissors, SplitSquareHorizontal, Trash2, Undo2 } from 'lucide-react'
 import type { Clip, TimelineData, TimeRange } from '@shared/types'
 import type { TimelineScale } from '@shared/timelineScale'
-import { autoRemovedRanges, editedClipDuration, normalizeRanges } from '@shared/tighten'
-import { cutRange, keepsPlayback, moveCutEdge, pieceAt, setTrimEdge, splitAt, timelinePieces, toggleRestored, uncutAt } from '@shared/editOps'
+import { activityKeptRanges, autoRemovedRanges, editedClipDuration, normalizeRanges } from '@shared/tighten'
+import { cutRange, keepsPlayback, moveCutEdge, pieceAt, setTrimEdge, splitAt, timelinePieces, toggleActiveGap, toggleRemovedPause, uncutAt } from '@shared/editOps'
 import { historyState } from '@shared/editHistory'
 import { usePreviewBus } from '../lib/previewBus'
 import { useStore } from '../store'
@@ -46,8 +46,13 @@ export default function TimelineEditor({ clip, scale, timelines, fps, onSave, on
     const restored = normalizeRanges(edit.restored, edit.start, edit.end)
     const auto = autoRemovedRanges(clip, transcript)
       .filter((r) => !restored.some((k) => k.start < r.end && k.end > r.start))
+    // Pauses kept because something happens in them: shown as kept, and one
+    // click removes them like any other pause.
+    const active = activityKeptRanges(clip, transcript)
+      .filter((r) => !restored.some((k) => k.start < r.end && k.end > r.start))
     return [
       ...auto.map((range) => ({ range, kind: 'auto' as const })),
+      ...active.map((range) => ({ range, kind: 'active' as const })),
       ...(edit.tightenCuts ? restored.map((range) => ({ range, kind: 'restored' as const })) : []),
       ...normalizeRanges(edit.cuts, edit.start, edit.end).map((range) => ({ range, kind: 'cut' as const }))
     ]
@@ -148,7 +153,8 @@ export default function TimelineEditor({ clip, scale, timelines, fps, onSave, on
         playsFor={editedClipDuration(clip, transcript)}
         onMarkClick={(mark) => {
           if (mark.kind === 'cut') onSave(uncutAt(edit, (mark.range.start + mark.range.end) / 2))
-          else saveTrim(toggleRestored(edit, mark.range))
+          else if (mark.kind === 'active') saveTrim(toggleActiveGap(edit, mark.range))
+          else saveTrim(toggleRemovedPause(edit, mark.range))
         }}
       />
       <div className="mt-2 flex flex-wrap items-center gap-1.5">

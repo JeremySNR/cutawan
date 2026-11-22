@@ -118,6 +118,8 @@ export function mergeReframeResult(current: Clip, analysed: Clip, videoType: Vid
     ...current,
     focusTrack: analysed.focusTrack,
     contentType: analysed.contentType,
+    // Measured alongside the framing, from the same trim: it travels with it.
+    gapActivity: analysed.gapActivity,
     visualLayout: (current.visualLayout?.revision ?? 0) > 0 &&
       (current.visualLayout?.revision ?? 0) >= (analysed.visualLayout?.revision ?? 0)
       ? current.visualLayout : analysed.visualLayout,
