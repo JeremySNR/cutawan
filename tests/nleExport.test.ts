@@ -13,6 +13,7 @@ import {
   frameRateFromFps,
   frameRateFromProbe,
   localhostFileUrl,
+  sourceFrameCount,
   srtTime,
   timelineSegments,
   toFrame,
@@ -93,6 +94,19 @@ describe('timeline segments', () => {
     expect(segs[0]).toEqual({ sourceIn: toFrame(10, NTSC), duration: toFrame(14, NTSC) - toFrame(10, NTSC), offset: 0 })
     expect(segs[1].offset).toBe(segs[0].duration)
     expect(segs[1].sourceIn).toBe(toFrame(30, NTSC))
+  })
+
+  it('never reaches past the last whole frame of the source', () => {
+    // 10.03 s at 29.97 fps is 300.6 frames: the file has 300 whole ones, but
+    // the end rounds to 301.
+    const frames = sourceFrameCount({ durationSec: 10.03, rate: NTSC })
+    expect(frames).toBe(300)
+    expect(toFrame(10.03, NTSC)).toBe(301)
+    const segs = timelineSegments([{ start: 5, end: 8 }, { start: 9, end: 10.03 }], NTSC, frames)
+    expect(segs.every(s => s.sourceIn + s.duration <= frames)).toBe(true)
+    expect(segs.at(-1)!.sourceIn + segs.at(-1)!.duration).toBe(frames)
+    // A piece wholly past the end is dropped, not given a negative length.
+    expect(timelineSegments([{ start: 10.02, end: 10.03 }], NTSC, frames)).toEqual([])
   })
 
   it('takes the kept segments after pause removal and cuts', () => {
@@ -312,5 +326,15 @@ describe('writing the files', () => {
     const again = await exportClipEdit(project, c, 'fcpxml', dir)
     expect(again.outputPath).not.toBe(fcp.outputPath)
     expect(again.srtPath).not.toBe(fcp.srtPath)
+  }, 30_000)
+
+  it('clamps the last segment to the frames the source has', async () => {
+    const short = { ...project, video: { ...project.video, durationSec: 10.03 } }
+    const frames = sourceFrameCount({ durationSec: 10.03, rate: NTSC })
+    const result = await exportClipEdit(short, clip({ start: 9, end: 10.03 }), 'xmeml', dir)
+    const xmeml = parseXml(await readFile(result.outputPath, 'utf8')).root
+    const items = findAll(xmeml, 'clipitem')
+    expect(items.length).toBeGreaterThan(0)
+    for (const item of items) expect(Number(childText(item, 'out'))).toBeLessThanOrEqual(frames)
   }, 30_000)
 })

@@ -983,7 +983,8 @@ async function render(job: RenderJob): Promise<RenderResult> {
       fontFamily: clip.edit.captionFontFamily ?? undefined,
       brandColors: job.branding?.colors,
       positionRanges,
-      translation: translatedCaptionPlan(clip, transcript, segments, captionStyle, w / h, process.platform, timeline?.coldOpenDuration ?? 0),
+      // Translated captions are captions: off with them, as in the preview.
+      translation: captions ? translatedCaptionPlan(clip, transcript, segments, captionStyle, w / h, process.platform, timeline?.coldOpenDuration ?? 0) : null,
       // Seams and emphasis exactly as the preview lays them out.
       ...clipCaptionOptions(clip, timeline ?? new ClipTimeline([{ start, end: clip.edit.end }]), captionStart)
     })

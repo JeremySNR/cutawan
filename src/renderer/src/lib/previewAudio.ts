@@ -73,6 +73,10 @@ function sfxBuffer(kind: SfxKind): AudioBuffer {
   return buffer
 }
 
+function sameCues(a: SfxCue[], b: SfxCue[]): boolean {
+  return a.length === b.length && a.every((cue, i) => cue.kind === b[i].kind && cue.start === b[i].start)
+}
+
 export interface PreviewMix {
   cues: SfxCue[]
   /** media:// URL of the music track, or null. */
@@ -85,7 +89,9 @@ export interface PreviewMix {
  * Plays a PreviewMix in step with the preview. `sync(out)` (re)starts it at
  * output time `out`; `stop()` silences it; `tick(out)` keeps the music's
  * ducking on the envelope. Call sync again after any jump (seek, loop) —
- * continuous playback needs nothing more, the clocks run together.
+ * continuous playback needs nothing more, the clocks run together. A mix
+ * that changes what plays (music or effects toggled, cues moved by a trim)
+ * while playing takes effect at once, from the last ticked time.
  *
  * Music plays through a plain audio element with its volume driven from the
  * shared envelope: routing a media:// file through WebAudio would be
@@ -95,11 +101,20 @@ export class PreviewAudio {
   private sources: AudioBufferSourceNode[] = []
   private music: HTMLAudioElement | null = null
   private musicUrl: string | null = null
+  /** Output time last synced or ticked while playing; null when stopped. */
+  private playingAt: number | null = null
+  /** Bumped by stop(), so a pending music start from an older sync is dropped. */
+  private generation = 0
+  /** Removes the loadedmetadata listener of a music start still waiting. */
+  private pendingMetadata: (() => void) | null = null
 
   constructor(private mix: PreviewMix) {}
 
   update(mix: PreviewMix): void {
+    const previous = this.mix
     this.mix = mix
+    const changed = previous.musicUrl !== mix.musicUrl || !sameCues(previous.cues, mix.cues)
+    if (changed && this.playingAt !== null) this.sync(this.playingAt)
   }
 
   get active(): boolean {
@@ -108,6 +123,7 @@ export class PreviewAudio {
 
   sync(out: number): void {
     this.stop()
+    this.playingAt = out
     if (!this.active) return
     if (this.mix.cues.length) {
       const ctx = audio()
@@ -128,6 +144,7 @@ export class PreviewAudio {
 
   /** Follow the ducking envelope; call on every preview frame while playing. */
   tick(out: number): void {
+    if (this.playingAt !== null) this.playingAt = out
     if (this.music && !this.music.paused) {
       const bed = dbToGain(PREVIEW_SPEECH_LUFS + MUSIC_BED_LU - PREVIEW_MUSIC_LUFS)
       this.music.volume = Math.max(0, Math.min(1, bed * envelopeGain(this.mix.envelope, out)))
@@ -145,16 +162,32 @@ export class PreviewAudio {
       this.musicUrl = this.mix.musicUrl
     }
     const element = this.music
+    const generation = this.generation
     const seek = (): void => {
+      // Stopped, resynced or switched track since: this start is stale.
+      if (generation !== this.generation || element !== this.music) return
       if (Number.isFinite(element.duration) && element.duration > 0) element.currentTime = out % element.duration
       element.volume = 0
       void element.play().then(() => this.tick(out)).catch(() => undefined)
     }
     if (element.readyState >= 1) seek()
-    else element.addEventListener('loadedmetadata', seek, { once: true })
+    else {
+      const onMetadata = (): void => {
+        element.removeEventListener('loadedmetadata', onMetadata)
+        seek()
+      }
+      element.addEventListener('loadedmetadata', onMetadata)
+      // stop() drops the listener when this start goes stale, so repeated
+      // syncs before the metadata arrives do not stack up.
+      this.pendingMetadata = () => element.removeEventListener('loadedmetadata', onMetadata)
+    }
   }
 
   stop(): void {
+    this.generation++
+    this.playingAt = null
+    this.pendingMetadata?.()
+    this.pendingMetadata = null
     for (const node of this.sources) {
       try { node.stop() } catch { /* already ended */ }
     }

@@ -510,8 +510,6 @@ export interface TranslatedCaptionEvent {
   start: number
   end: number
   lines: string[]
-  /** Source time of the card's middle, for layout bands kept in source time. */
-  sourceMid: number
   rtl: boolean
 }
 
@@ -563,7 +561,7 @@ export function translatedCaptionEvents(
       let end = last ? slot.end : at + (span * weights[i]) / total
       at = end
       if (last) end = Math.min(duration, Math.max(slot.end, Math.min(slot.end + CAPTION_HOLD_SEC, nextStart)))
-      events.push({ start, end, lines: card, sourceMid: map.toSource((start + Math.min(end, slot.end)) / 2), rtl })
+      events.push({ start, end, lines: card, rtl })
     })
   })
   return events

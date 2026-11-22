@@ -196,8 +196,12 @@ function falseStarts(words: RetakeWord[]): Retake[] {
       const lastAbandoned = tokens[q - 1].index
       const abandoned = tokens.slice(p, q)
       const between = words.slice(tokens[p].index, tokens[q].index)
-      const cue = between.some(w => w.filler || trailsOff(w.text)) ||
-        hasEditTerm(abandoned.slice(m).map(t => t.norm)) ||
+      const edited = hasEditTerm(abandoned.slice(m).map(t => t.norm))
+      // A finished sentence is not an abandoned attempt: "It was great. It
+      // was amazing, really." says two things. Only an explicit edit term
+      // ("sorry", "I mean") overrides the full stop.
+      if (!edited && abandoned.some(t => endsSentence(words[t.index].text) && !trailsOff(words[t.index].text))) continue
+      const cue = edited || between.some(w => w.filler || trailsOff(w.text)) ||
         words[tokens[q].index].start - words[lastAbandoned].end >= HESITATION_SEC
       if (!cue) continue
       found = { first: tokens[p].index, last: tokens[q].index - 1, restart: tokens[q].index, kind: 'false-start' }

@@ -463,7 +463,7 @@ export default function PreviewPlayer({
             style={style}
           />
         )}
-        <TranslatedCaptionOverlay project={project} clip={clip} segments={keptSegments} outputTime={outputTime} outputOffset={timeline.coldOpenDuration} sourceTime={time} aspectRatio={aspectStyle} />
+        <TranslatedCaptionOverlay project={project} clip={clip} segments={keptSegments} outputTime={outputTime} outputOffset={timeline.coldOpenDuration} sourceTime={time} positionRanges={positionRanges} aspectRatio={aspectStyle} />
 
         {showTitle && titlePlan && <TitleOverlay plan={titlePlan} />}
         {inColdOpen && (
