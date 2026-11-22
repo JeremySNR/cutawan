@@ -97,9 +97,10 @@ describe('batch queue', () => {
     await h.queue.start()
     await until(() => h.gates.has('amp4'))
     h.gates.get('amp4')!.reject(new Error('No API key configured.'))
-    await until(() => h.queue.state().items[0].status === 'failed')
+    // The failure is saved before the queue sees nothing is left and stops,
+    // so wait for the settled state rather than the first sign of failure.
+    await until(() => h.queue.state().items[0].status === 'failed' && !h.queue.state().running)
     expect(h.queue.state().items[0].error).toBe('No API key configured.')
-    expect(h.queue.state().running).toBe(false)
     h.gates.clear()
     await h.queue.retry(h.queue.state().items[0].id)
     await h.queue.start()
