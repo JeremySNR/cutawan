@@ -197,7 +197,10 @@ export async function analyzeProject(
       options,
       project.video.durationSec,
       signal,
-      ({ fraction, message }) => onProgress({ stage: 'analyze', progress: 0.6 + fraction * 0.04, message })
+      ({ fraction, message }) => onProgress({ stage: 'analyze', progress: 0.6 + fraction * 0.04, message }),
+      // The outline of the whole video, used to join distant moments, is
+      // reused across regenerations; it depends only on the transcript and model.
+      { cacheDir: join(projectDir(project.id), 'outline-cache'), providerCacheKey: settings.analysisProviderKey }
     )) : []
     for (const clip of clips) clip.discovery = { origin: 'transcript' }
     clips.push(...visualClips)

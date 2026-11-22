@@ -3,8 +3,8 @@
 By default every clip is one continuous stretch of the source. With **Join
 separate moments** ticked on the setup screen, the AI may also propose a clip
 made of two or three stretches played back to back: a question and its answer
-with the tangent between them removed, a setup and the payoff that arrives a
-few minutes later, a claim and the best evidence for it.
+with the tangent between them removed, a setup and the payoff that arrives
+later, a claim and the best evidence for it.
 
 It is off by default and marked beta. It has been tested with scripted model
 replies and with real exports; it has not yet been compared against continuous
@@ -25,36 +25,110 @@ or end sooner, undo either.
 
 ## How a join is chosen and checked
 
-1. **Selection.** The selection request asks for each clip as an ordered list
-   of one to three segments, with rules: most clips should be one segment; a
-   join must remove something specific and at least several sentences long; the
-   lines either side must follow as if nothing was removed; and a join must
-   never change what a speaker meant.
-2. **Landing.** Each segment is landed on sentence boundaries with the same
-   pre- and post-roll as a continuous clip. Segments a breath apart are merged
-   back into one moment. A joined clip is taken as proposed or dropped: one
-   with a part under three seconds, more than three parts, or more played time
-   than the length cap is not trimmed to fit.
-3. **Join review.** A separate request judges every join on two questions:
+1. **Selection.** The transcript is shown to the model one sentence per line,
+   each with its line number and its start and end time, and the model answers
+   with line numbers, never times. The selection request asks for each clip as
+   an ordered list of one to three segments, each a first and last line, with
+   rules: most clips should be one segment; a join must remove something
+   specific and at least several sentences long; the lines either side must
+   follow as if nothing was removed; and a join must never change what a
+   speaker meant. Videos with more than about twenty minutes of speech are read
+   in overlapping windows, one request each (see Limits).
+2. **Repair.** If the answer breaks a rule that can be named (a line number it
+   was not shown, a segment that ends before it starts, a joined clip over the
+   length cap, a segment under three seconds, more than three segments), one
+   follow-up request shows the model its answer and the problems in plain words
+   and asks for a corrected list. The corrected list is used only if it has
+   no fewer usable clips and fewer problems (or as many, when the first answer
+   had nothing usable). There is never a second repair, and
+   none on ChatGPT sign-in.
+3. **Landing.** Each segment is mapped from its line numbers to the exact start
+   of its first sentence and end of its last, with the same pre- and post-roll
+   as a continuous clip. Segments a breath apart are merged back into one
+   moment. A joined clip is taken as proposed or dropped: one with a part under
+   three seconds, more than three parts, or more played time than the length
+   cap is not trimmed to fit.
+4. **Distant moments.** On a video read in more than one window, an outline of
+   the whole video is used to find setups whose payoff lies further away than
+   any window reaches (see below). The joined clips it produces join the same
+   candidate list as the others before the join review.
+5. **Join review.** A separate request judges every join on two questions:
    *seamless* (would a listener notice anything missing?) and *faithful* (does
    the joined clip mean what the speakers meant?). It sees the lines that play
    before the join, the lines that were skipped, and the lines that play after.
    A joined clip is kept only on an explicit pass on both. A clip with no
    verdict is dropped, and if the review request fails, all joined clips are
    dropped and the continuous ones are kept.
-4. **Ending and opening reviews** then run as usual, on the text that plays.
+6. **Opening check.** A check without any request (English transcripts only)
+   skips throwaway lead-ins such as "Yeah." or "Okay, so." at the start of a
+   clip, and marks down a clip whose first sentence leans on something said
+   before it ("And...", "That's why..."), saying so in its score reason. On a
+   joined clip it only ever moves the start within the first moment.
+7. **Ending and opening reviews** then run as usual, on the text that plays.
    They can move a joined clip's end within its last moment and its start
-   within its first, never across a join.
+   within its first, never across a join. On a video read in windows, a last
+   request scores all candidates side by side so clips from different windows
+   rank on one scale.
+
+## Joining moments far apart
+
+The windows that selection reads overlap by six minutes when joining is on, so
+two moments up to about five minutes apart are always in front of the same
+request, and the selection pass itself can join them. Moments further apart are
+found another way:
+
+1. **Mapping.** The transcript is split into parts of about twelve minutes that
+   overlap by thirty seconds, and each part gets one request. It returns that
+   part's chapters, the threads it leaves open (a question not yet answered, a
+   setup, a claim without its proof, an unfinished story) and the moments in it
+   that answer, pay off, prove or continue something, each as a range of line
+   numbers with a short label.
+2. **Matching.** One request reads only those lists, not the transcript, and
+   pairs open threads with the later moments that settle them, strongest first.
+   Every line number in a mapping reply is checked against the lines that
+   request was given, and every pairing must name a thread and a later moment
+   that the mapping found; anything else is discarded. If any of these requests fails,
+   the run carries on without distant joins.
+3. **Proposing.** Pairings that some selection window already held whole are
+   left out, since that window could have joined them. Of the rest, the eight
+   strongest go into one request that shows, for each pairing, the real numbered
+   lines around the first moment and around the second (each range, up to
+   thirty lines of it, plus four lines either side). For each pairing the model
+   returns one joined clip in the same format as the selection pass, or
+   declines. The prompt carries the same selection and joining rules and says
+   that declining is often the right answer. A clip may use only its own
+   pairing's lines and must take a segment from each moment; it is landed with
+   the same rules as any other clip, without a repair request.
+
+The outline depends only on the transcript and the AI model, not on the
+instructions or clip length, so it is saved in the project folder
+(`outline-cache`) and reused when clips are generated again. A saved outline is
+checked against the current transcript before it is used, and an outline that
+failed is never saved.
+
+**Requests.** For speech that spans *S* seconds (more than twenty minutes), the
+first run spends ⌈(*S* − 30) / 690⌉ mapping requests, one matching request
+(none when nothing was left open) and one proposing request (none when no
+pairing is too far apart for a window). That is 11 + 1 + 1 = 13 extra requests
+for a two-hour video, and 1 on later runs with the same transcript and model.
+The joined clips it adds are judged by the join review like any other, which
+can add one join-review request when the windows produced no joined clips of
+their own. Videos read in one request, and runs with joining off, make none of
+these requests. ChatGPT sign-in makes none of them either: it reads the whole
+transcript in one request, so moments of any distance can be joined there, but
+only by that one request.
 
 ## Limits
 
-- A join can only be proposed by a request that sees both moments. Videos
-  under about twenty minutes of speech are analysed in one request, so any two
-  moments can be joined. Longer videos are analysed in twelve-minute windows
-  that overlap by six minutes when joining is on, so a joined clip whose first
-  moment starts and last moment ends within six minutes is always seen whole
-  by some request (a skip of up to about five minutes). Moments further apart
-  than a window are never joined. The wider overlap roughly doubles the text sent for selection.
+- Nearby moments (up to about five minutes apart) are found by the normal
+  selection pass. Distant moments are joined only when the outline pairs them:
+  a setup whose payoff the outline does not notice, or matches to the wrong
+  moment, is not joined, and at most eight distant pairings are tried per run.
+  The wider window overlap for nearby joins roughly doubles the text sent for
+  selection.
+- The outline judges from labels and the proposal from a few dozen lines around
+  each moment. Neither sees what is said between the two moments; the join
+  review sees an excerpt of it.
 - Segments always play in source order.
 - The review reads text. It cannot tell that two lines were spoken by
   different people unless the words show it, and it cannot see a change of

@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { detectHighlights } from '../src/main/pipeline/highlights'
 import { chatJSON } from '../src/main/pipeline/openai'
 import { transcriptSentences } from '@shared/sentences'
@@ -8,7 +11,7 @@ import { makeTranscript } from './helpers'
  * ChatGPT sign-in has a small daily request cap and no retries, so a long
  * video must cost it the same number of requests as a short one, and none of
  * the optional extra requests (a repair of a broken selection, the
- * comparative rerank) may run on it.
+ * comparative rerank, the video outline and distant joins) may run on it.
  */
 vi.mock('../src/main/subscription', () => ({ usesSubscription: () => true, throwIfSubscriptionError: () => undefined }))
 vi.mock('../src/main/pipeline/openai', () => ({ chatJSON: vi.fn() }))
@@ -84,6 +87,27 @@ describe('detectHighlights on ChatGPT sign-in', () => {
     const clips = await detectHighlights('key', 'model', transcript, { ...options, stitch: true }, transcript.durationSec)
     expect(clips.map((c) => c.title).sort()).toEqual(['clip 1', 'clip 3'])
     expect(vi.mocked(chatJSON).mock.calls.map((call) => call[3])).toEqual(['viral_clips', 'clip_joins', 'clip_endings', 'clip_openings'])
+  })
+
+  it('builds no outline and proposes no distant joins, even with a cache directory', async () => {
+    vi.mocked(chatJSON).mockImplementation(async (_key, _model, _messages, schema) => {
+      if (schema === 'viral_clips') {
+        return { clips: [{ segments: [{ start_line: 10, end_line: 13 }, { start_line: 40, end_line: 43 }], join_reason: 'skips a tangent', ...clipFields(1) }] }
+      }
+      if (schema === 'clip_joins') return { clips: [{ index: 0, seamless: true, faithful: true, reason: 'follows' }] }
+      return schema === 'clip_endings' ? { endings: [] } : { starts: [] }
+    })
+    const dir = await mkdtemp(join(tmpdir(), 'cutawan-outline-sub-'))
+    try {
+      await detectHighlights('key', 'model', transcript, { ...options, stitch: true }, transcript.durationSec,
+        undefined, undefined, { cacheDir: dir, providerCacheKey: 'chatgpt:model:low' })
+      const schemas = vi.mocked(chatJSON).mock.calls.map((call) => call[3])
+      expect(schemas).toEqual(['viral_clips', 'clip_joins', 'clip_endings', 'clip_openings'])
+      expect(schemas.some((s) => s.startsWith('outline') || s === 'long_range_joins')).toBe(false)
+      expect(await readdir(dir)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   it('spends no opening review when hook-first is off', async () => {

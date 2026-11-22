@@ -419,7 +419,11 @@ function SetupPanel(): React.JSX.Element {
                     answer with the tangent between them removed, or a setup and its later payoff. Most clips stay
                     one continuous moment. Every join gets one extra AI review that it plays seamlessly and keeps
                     what was said; joined clips are labelled, and you can move or undo the join in the editor.
-                    {' '}Looks for moments within about five minutes of each other.
+                    {' '}Moments up to about five minutes apart are found as clips are picked. On videos with more
+                    than twenty minutes of speech, moments further apart are joined only when an outline of the
+                    whole video pairs them: about one extra request per twelve minutes of speech plus two (13 for
+                    two hours) the first time, one on later runs. ChatGPT sign-in skips the outline and reads the
+                    whole video in one request instead.
                   </span>
                 </span>
               </label>

@@ -24,6 +24,7 @@ import {
   type Sentence
 } from '@shared/sentences'
 import { chatJSON } from './openai'
+import { buildVideoOutline, type OutlinePairing } from './outline'
 
 /**
  * A clip's span as the model gave it: the numbers of the first and last
@@ -107,6 +108,22 @@ const MAX_SEGMENTS = 3
  * is allowed, in which case it is an ordered list of one to three parts.
  */
 function responseSchema(stitch: boolean): Record<string, unknown> {
+  const properties = clipProperties(stitch)
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['clips'],
+    properties: {
+      clips: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: false, required: Object.keys(properties), properties }
+      }
+    }
+  }
+}
+
+/** The fields of one clip in a reply: its span (one range, or segments) and the rest. */
+function clipProperties(stitch: boolean): Record<string, unknown> {
   const span = stitch
     ? {
         segments: {
@@ -131,18 +148,7 @@ function responseSchema(stitch: boolean): Record<string, unknown> {
         start_line: { type: 'integer', description: 'Number of the transcript line the clip opens on' },
         end_line: { type: 'integer', description: 'Number of the transcript line the clip closes on (included in the clip)' }
       }
-  const properties = { ...span, ...CLIP_FIELDS }
-  return {
-    type: 'object',
-    additionalProperties: false,
-    required: ['clips'],
-    properties: {
-      clips: {
-        type: 'array',
-        items: { type: 'object', additionalProperties: false, required: Object.keys(properties), properties }
-      }
-    }
-  }
+  return { ...span, ...CLIP_FIELDS }
 }
 
 /**
@@ -1194,6 +1200,248 @@ function windowClipCount(window: AnalysisWindow): number {
   return Math.max(3, Math.min(12, Math.round((window.to - window.from) / 60)))
 }
 
+/**
+ * Windows for the video outline. The outline names moments, it does not cut
+ * them, so no clip has to fit whole inside one part and the overlap is only
+ * the planner's slack: enough that a line at a boundary is read with a little
+ * of what leads into it. Same window size as selection, so for speech that
+ * spans S seconds past the single-request limit this is
+ * ceil((S - 30) / 690) parts: eleven for two hours. Exported for tests.
+ */
+export function planOutlineWindows(sentences: Sentence[]): AnalysisWindow[] {
+  return planAnalysisWindows(sentences, 0)
+}
+
+/** Most outline pairings the long-range request considers. */
+const MAX_LONG_RANGE_PAIRINGS = 8
+/** Lines shown before and after each end of a pairing, so a part can open on the lead-in or run on to the landing. */
+const PAIRING_CONTEXT_LINES = 4
+/**
+ * Most lines of one end's own range shown. A clip plays at most 100 seconds,
+ * about forty short lines in all, so lines past this are text no joined clip
+ * could use.
+ */
+const PAIRING_RANGE_LINES = 30
+
+/**
+ * Whether some analysis window holds both ends of a pairing. Such a pairing
+ * was in front of one selection request already, which could have joined it;
+ * sending it again would only buy a second opinion. Exported for tests.
+ */
+export function pairingFitsOneWindow(pairing: Pick<OutlinePairing, 'setup' | 'payoff'>, windows: AnalysisWindow[]): boolean {
+  return windows.some((w) => {
+    const first = w.sentences[0]?.index
+    const last = w.sentences[w.sentences.length - 1]?.index
+    return first !== undefined && last !== undefined && pairing.setup.startLine >= first && pairing.payoff.endLine <= last
+  })
+}
+
+/**
+ * The outline pairings worth a long-range request: those no single window
+ * saw whole, strongest first as the matching step ranked them, at most `max`.
+ * Exported for tests.
+ */
+export function longRangePairings(pairings: OutlinePairing[], windows: AnalysisWindow[], max = MAX_LONG_RANGE_PAIRINGS): OutlinePairing[] {
+  return pairings.filter((p) => !pairingFitsOneWindow(p, windows)).slice(0, max)
+}
+
+/**
+ * The lines shown for one end of a pairing: its range (at most
+ * PAIRING_RANGE_LINES of it) with a few lines either side. `sentences` is the
+ * whole transcript, where a sentence's index is its position. Exported for
+ * tests.
+ */
+export function pairingLines(range: { startLine: number; endLine: number }, sentences: Sentence[]): Sentence[] {
+  const first = Math.max(0, range.startLine - PAIRING_CONTEXT_LINES)
+  const last = Math.min(sentences.length - 1, Math.min(range.endLine, range.startLine + PAIRING_RANGE_LINES - 1) + PAIRING_CONTEXT_LINES)
+  return sentences.slice(first, last + 1)
+}
+
+/**
+ * Added to the selection and joining prompts for the long-range request. The
+ * selection rules and the joining rules above it still apply in full; this
+ * only explains that the request is about given pairings, and that saying no
+ * is a good answer.
+ */
+const LONG_RANGE_PROMPT = `Joining distant moments:
+- This time you are not choosing clips from a whole transcript. An outline of the video has paired moments that are far apart: a setup and the payoff that comes much later, a question and its answer, a claim and its evidence, the start of a story and its end. For each pairing you are shown the numbered lines around the first moment and the numbered lines around the second.
+- For each pairing, either return ONE clip that joins the two moments or decline the pairing. A clip for a pairing has at least one segment from the first moment's lines and at least one from the second moment's lines (at most ${MAX_SEGMENTS} segments in all), uses only that pairing's lines, and gives the pairing's number in "pairing".
+- Everything between the two moments is skipped, so the rules for joining apply with full force: the second moment must not lean on anything the viewer did not hear.
+- Decline when the two moments do not make one clip that a viewer with no context would follow, when the payoff only makes sense with what was said in between, or when the lines do not bear out the outline's reason for the pairing. Declining is often the right answer; list each declined pairing with a short reason.`
+
+/** The long-range reply: joined clips in the selection schema, each naming its pairing, and the pairings declined. */
+function longRangeSchema(): Record<string, unknown> {
+  const properties = {
+    pairing: { type: 'integer', description: 'The number of the pairing this clip joins' },
+    ...clipProperties(true)
+  }
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['clips', 'declined'],
+    properties: {
+      clips: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: false, required: Object.keys(properties), properties }
+      },
+      declined: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['pairing', 'reason'],
+          properties: {
+            pairing: { type: 'integer', description: 'The number of the pairing declined' },
+            reason: { type: 'string', description: 'One short sentence on why the two moments do not make one clip' }
+          }
+        }
+      }
+    }
+  }
+}
+
+interface LongRangeResponse {
+  clips?: Array<RawHighlight & { pairing?: unknown }>
+  declined?: Array<{ pairing?: unknown; reason?: unknown }>
+}
+
+/**
+ * One request over the outline's distant pairings: for each, the model sees
+ * the real numbered lines around both ends and returns a joined clip or
+ * declines. Each clip is landed by `landSelection` with only its own
+ * pairing's lines as valid ids, so the usual rules hold (played time under
+ * the cap, no fragment, at most three parts), and a clip that does not
+ * actually join the two moments is dropped: a continuous stretch of one of
+ * them is what the windowed pass already offers. No repair request, so the
+ * cost stays one. A failure costs only these clips.
+ */
+async function proposeLongRangeJoins(
+  apiKey: string,
+  model: string,
+  transcript: Transcript,
+  sentences: Sentence[],
+  options: AnalyzeOptions,
+  videoDurationSec: number,
+  pairings: OutlinePairing[],
+  signal?: AbortSignal
+): Promise<Clip[]> {
+  const shown = pairings
+    .map((pairing) => ({ pairing, setup: pairingLines(pairing.setup, sentences), payoff: pairingLines(pairing.payoff, sentences) }))
+    // Neighbourhoods that touch are not distant moments; nothing here to join.
+    .filter((p) => p.setup.length > 0 && p.payoff.length > 0 && p.setup[p.setup.length - 1].index < p.payoff[0].index)
+  if (shown.length === 0) return []
+
+  const blocks = shown.map(({ pairing, setup, payoff }, i) => [
+    `Pairing ${i} — the outline's reason: "${pairing.reason || 'none given'}"`,
+    `First moment (${pairing.setupLabel}), lines #${setup[0].index} to #${setup[setup.length - 1].index}:`,
+    formatTranscriptForModel(setup),
+    `Second moment (${pairing.payoffLabel}), lines #${payoff[0].index} to #${payoff[payoff.length - 1].index}:`,
+    formatTranscriptForModel(payoff)
+  ].join('\n'))
+  const user = [
+    `Video duration: ${videoDurationSec.toFixed(1)} seconds.`,
+    lengthGuidance(options.clipLength),
+    options.prompt.trim()
+      ? `The creator gave these special instructions, which take priority when choosing moments: "${options.prompt.trim()}"`
+      : '',
+    `Return a joined clip or a refusal for each of the ${shown.length} pairings below. Give each segment as the number of the line it opens on ("start_line") and the number of the line it closes on ("end_line"), both included. Lines are prefixed with their line number and [start - end] in seconds from the start of the video.`,
+    blocks.join('\n\n')
+  ].filter(Boolean).join('\n\n')
+
+  let res: LongRangeResponse
+  try {
+    res = await chatJSON<LongRangeResponse>(
+      apiKey,
+      model,
+      [
+        { role: 'system', content: `${SYSTEM_PROMPT}\n\n${STITCH_PROMPT}\n\n${LONG_RANGE_PROMPT}` },
+        { role: 'user', content: user }
+      ],
+      'long_range_joins',
+      longRangeSchema(),
+      signal
+    )
+  } catch (err) {
+    throwIfSubscriptionError(err)
+    if (signal?.aborted) throw err
+    console.error('Joining distant moments failed; keeping the clips found so far:', err)
+    return []
+  }
+  if (process.env.CUTAWAN_DEBUG) console.error('[highlights] long-range joins:', JSON.stringify(res, null, 2))
+
+  const clips: Clip[] = []
+  const answered = new Set<number>()
+  for (const raw of Array.isArray(res?.clips) ? res.clips : []) {
+    if (!raw || typeof raw !== 'object') continue
+    const n = parseLineId(raw.pairing)
+    // One clip per pairing, and only for a pairing that was shown.
+    if (n === undefined || Number.isNaN(n) || !shown[n] || answered.has(n)) continue
+    answered.add(n)
+    const { setup, payoff } = shown[n]
+    const landed = landSelection({ clips: [raw] }, {
+      transcript,
+      sentences,
+      shown: new Map([...setup, ...payoff].map((s) => [s.index, s])),
+      options,
+      videoDurationSec
+    })
+    const clip = landed.clips[0]
+    const parts = clip ? candidateRanges(clip) : []
+    const joinsBoth = clip?.stitch !== undefined && parts.length > 1 &&
+      parts[0].start <= setup[setup.length - 1].end && parts[parts.length - 1].end >= payoff[0].start
+    if (clip && joinsBoth) clips.push(clip)
+    else if (process.env.CUTAWAN_DEBUG) {
+      console.error(`[highlights] long-range pairing ${n} gave no joined clip: ${landed.violations.join(' ') || 'not a join of both moments'}`)
+    }
+  }
+  return dedupeClips(clips.sort((a, b) => b.viralityScore - a.viralityScore))
+}
+
+/** Where the outline lives between runs, and whose model built it. */
+export interface HighlightContext {
+  /** Directory for the cached video outline (inside the project folder); no caching without it. */
+  cacheDir?: string
+  /** The effective provider and model identity, as in settings' analysisProviderKey. */
+  providerCacheKey?: string
+}
+
+/**
+ * Joined clips of moments too far apart for any one selection request to
+ * see both: build (or load) the outline, keep the pairings no window held
+ * whole, and ask for those in one request. Costs one request per outline
+ * window plus one to match on a first run, nothing for the outline when it is
+ * cached, and one for the proposals when there is a distant pairing at all.
+ */
+async function joinDistantMoments(
+  apiKey: string,
+  model: string,
+  transcript: Transcript,
+  sentences: Sentence[],
+  options: AnalyzeOptions,
+  videoDurationSec: number,
+  windows: AnalysisWindow[],
+  context: HighlightContext | undefined,
+  signal?: AbortSignal,
+  onProgress?: (progress: HighlightProgress) => void
+): Promise<Clip[]> {
+  const report = (message: string): void => onProgress?.({ fraction: FIND_SHARE, message })
+  const outline = await buildVideoOutline({
+    apiKey,
+    model,
+    sentences,
+    windows: planOutlineWindows(sentences).map((w) => w.sentences),
+    cacheDir: context?.cacheDir,
+    providerCacheKey: context?.providerCacheKey,
+    signal,
+    onProgress: report
+  })
+  if (!outline) return []
+  const pairings = longRangePairings(outline.pairings, windows)
+  if (pairings.length === 0) return []
+  report('Joining distant moments…')
+  return proposeLongRangeJoins(apiKey, model, transcript, sentences, options, videoDurationSec, pairings, signal)
+}
+
 export interface HighlightProgress {
   /** 0..1 across the whole highlight pass. */
   fraction: number
@@ -1210,7 +1458,8 @@ export async function detectHighlights(
   options: AnalyzeOptions,
   videoDurationSec: number,
   signal?: AbortSignal,
-  onProgress?: (progress: HighlightProgress) => void
+  onProgress?: (progress: HighlightProgress) => void,
+  context?: HighlightContext
 ): Promise<Clip[]> {
   const maxDuration = maxDurationFor(options.clipLength)
   // One sentence per line. Whisper segments break mid-sentence, and a model
@@ -1247,7 +1496,20 @@ export async function detectHighlights(
   // LLM output is nondeterministic: occasionally it returns an empty list on
   // perfectly clippable material, so retry once with a firmer instruction.
   const first = await find(false)
-  const found = first.length > 0 ? first : await find(true)
+  let found = first.length > 0 ? first : await find(true)
+  // Windows overlap enough to join moments a few minutes apart; anything
+  // further apart only the outline can pair. Never on the scarce route, and a
+  // single window already showed the model every pair of moments.
+  if (options.stitch && windowed && !requestsAreScarce()) {
+    const distant = await joinDistantMoments(apiKey, model, transcript, sentences, options, videoDurationSec, windows, context, signal, onProgress)
+    if (distant.length > 0) {
+      // Into the same list as the windowed clips, before the join review, so
+      // they are judged like any other join; the list keeps its size so the
+      // later per-clip reviews cost what they did.
+      found = dedupeClips([...found, ...distant].sort((a, b) => b.viralityScore - a.viralityScore))
+        .slice(0, targetClipCount(videoDurationSec))
+    }
+  }
   if (found.some((clip) => clip.stitch)) onProgress?.({ fraction: FIND_SHARE, message: 'Checking joined moments…' })
   const joinChecked = await reviewJoins(apiKey, model, transcript, found, signal)
   // Free and deterministic, so before the reviews: the ending and opening
