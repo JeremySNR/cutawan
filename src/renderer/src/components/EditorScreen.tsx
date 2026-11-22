@@ -39,7 +39,8 @@ import TranslationSection from './TranslationSection'
 import { ExportButton } from './ClipsScreen'
 import SizeTargetControls from './SizeTargetControls'
 import EditExportMenu from './EditExportMenu'
-import { CAPTION_STYLES, resolveCaptionStyle } from '@shared/captionStyles'
+import { CAPTION_STYLES, captionEmojiEnabled, getCaptionStyle, resolveCaptionStyle } from '@shared/captionStyles'
+import { AnimatedStyleSample } from './AnimatedCaptionLayer'
 import { DEFAULT_TITLE_STYLE, TITLE_SHOW_SEC, TITLE_STYLES } from '@shared/titleLayout'
 import { clipTimelineParts } from '@shared/clipTimeline'
 import { wordsInRange } from '@shared/captionLayout'
@@ -409,7 +410,7 @@ export default function EditorScreen(): React.JSX.Element {
           />
           {clip.edit.captionsEnabled && (
             <div className="mt-3 grid grid-cols-2 gap-2">
-              {CAPTION_STYLES.map((preset) => {
+              {CAPTION_STYLES.filter((preset) => !preset.animation).map((preset) => {
                 const style = resolveCaptionStyle(preset.id, brandColors)
                 return (
                 <button
@@ -444,6 +445,35 @@ export default function EditorScreen(): React.JSX.Element {
                   <div className="mt-1 text-[11px] text-zinc-500">{preset.name}</div>
                 </button>
               )})}
+            </div>
+          )}
+          {clip.edit.captionsEnabled && (
+            <div className="mt-3" data-testid="animated-caption-styles">
+              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">Animated</div>
+              <div className="grid grid-cols-2 gap-2">
+                {CAPTION_STYLES.filter((preset) => preset.animation).map((preset) => {
+                  const style = resolveCaptionStyle(preset.id, brandColors)
+                  return (
+                    <button
+                      key={preset.id}
+                      data-testid={`caption-style-${preset.id}`}
+                      onClick={() => set({ captionStyleId: preset.id })}
+                      className={`rounded-xl border px-3 py-2 text-left transition ${
+                        clip.edit.captionStyleId === preset.id
+                          ? 'border-white/30 bg-white/[0.07]'
+                          : 'border-surface-600 hover:bg-surface-800'
+                      }`}
+                    >
+                      <AnimatedStyleSample style={style} />
+                      <div className="mt-1 text-[11px] text-zinc-500">{preset.name}</div>
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600">
+                Springy motion, gradients, soft shadows and colour emoji. If they cannot be drawn on export,
+                the file falls back to the {getCaptionStyle(getCaptionStyle(clip.edit.captionStyleId).animation?.fallbackStyleId ?? 'beast').name} look and says so.
+              </p>
             </div>
           )}
           {clip.edit.captionsEnabled && (
@@ -482,7 +512,7 @@ export default function EditorScreen(): React.JSX.Element {
               <Toggle
                 label="Emoji after some key words"
                 testId="emoji-toggle"
-                checked={clip.edit.emoji === true}
+                checked={captionEmojiEnabled(clip.edit)}
                 disabled={clip.edit.emphasis === false}
                 onChange={(v) => set({ emoji: v })}
               />
@@ -490,8 +520,9 @@ export default function EditorScreen(): React.JSX.Element {
                 {clip.emphasis?.words.length
                   ? 'Key words were picked by the AI review of this clip. '
                   : 'Key words are picked from numbers, names and strong words. '}
-                Emoji are outline icons in the caption colour: burned-in captions cannot draw colour
-                emoji, so the preview shows exactly what exports.
+                {getCaptionStyle(clip.edit.captionStyleId).animation
+                  ? 'Animated styles draw colour emoji, in the preview and the export alike.'
+                  : 'Emoji are outline icons in the caption colour: burned-in captions cannot draw colour emoji, so the preview shows exactly what exports.'}
               </p>
             </div>
           )}

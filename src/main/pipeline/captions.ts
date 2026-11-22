@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { Transcript, BrandColors, CaptionEmphasisWord, TitleStyleId } from '@shared/types'
-import { captionEmphasisLook, resolveCaptionStyle, type CaptionStyle } from '@shared/captionStyles'
+import { captionEmphasisLook, libassCaptionStyleId, resolveCaptionStyle, type CaptionStyle } from '@shared/captionStyles'
 import { captionPositionAt, type CaptionPositionRange } from '@shared/contentRegion'
 import { CAPTION_EMOJI_FONT, EMOJI_EM, EMPHASIS_SCALE } from '@shared/captionEmphasis'
 import { planTitle, type TitlePlan } from '@shared/titleLayout'
@@ -216,7 +216,8 @@ function titleAss(plan: TitlePlan, opts: CaptionOptions): { style: string; event
 }
 
 export function buildAss(transcript: Transcript, opts: CaptionOptions): string {
-  const style = resolveCaptionStyle(opts.styleId, opts.brandColors, opts.fontFamily)
+  // libass cannot draw the animated styles; it burns their nearest look.
+  const style = resolveCaptionStyle(libassCaptionStyleId(opts.styleId), opts.brandColors, opts.fontFamily)
   const fontSize = assFontSize(style.fontScale * opts.height, opts.fontMetrics ?? null)
   const emojiFontSize = assFontSize(style.fontScale * opts.height * EMOJI_EM, EMOJI_FONT_METRICS)
   // Captions are positioned per event with \an5\pos so the block is centred on

@@ -626,6 +626,11 @@ export interface ExportResult {
   overBudget?: boolean
   /** What the check after the render found and repaired (main/pipeline/exportCheck.ts). */
   check?: ExportCheckReport
+  /**
+   * Set when the clip's animated caption style could not be drawn and the
+   * file has its libass equivalent instead: one sentence saying so and why.
+   */
+  captionNotice?: string
 }
 
 /** One thing the post-export check noticed. Times are seconds into the exported file. */
