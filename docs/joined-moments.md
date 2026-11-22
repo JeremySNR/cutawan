@@ -155,3 +155,29 @@ loudness measurement and export read only the stretches that play: cuts
 shorter than fifteen seconds are read through, longer ones are skipped with a
 separate seek. If the skipped stretch is restored in the editor, the clip is
 marked for framing analysis again, since nothing has looked at that footage.
+
+## Live check (2026-11-22)
+
+Against gpt-5.4-mini on a synthetic 52-minute, two-person podcast transcript
+written so that a question at the start ("what was the worst week?") is
+answered only near the end. Six runs while the feature was built:
+
+- The outline paired the opening question with the right payoff (the story
+  told at minute 44 to 48) in four of the six runs. In the others it paired it
+  with an earlier mention of the same subject, which the joining step then
+  could not turn into a clip.
+- Asked for a joined clip, the model took far too much of each moment
+  (188 to 303 seconds against a 100 to 125 second limit), and one correction
+  only brought it to 122 to 186 seconds. Showing each line's length and the
+  per-part budget helped but did not fix it; the sentence-trimming fallback is
+  what produced a clip.
+- In the final run that clip (0:42 to 0:54, then 47:12 to 49:42) passed the
+  join review and ranked second of 35. It runs 124 seconds, so it carries the
+  "runs long" note.
+- Selection by line number held: no clip landed mid-sentence. About two in
+  three windows needed the one correction request, nearly always for clips
+  over the length limit.
+
+One synthetic transcript is not a measure of how often joins are good on real
+footage; treat these as smoke results.
+
