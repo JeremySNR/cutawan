@@ -15,7 +15,7 @@ let topicClient: ReturnType<typeof createInferenceClient> | undefined
  * framing, which uses the shared one.
  */
 const runInference: ReturnType<typeof createInferenceClient>['run'] = (...args) => {
-  topicClient ??= createInferenceClient()
+  topicClient ??= createInferenceClient(undefined, 'Topic detection')
   return topicClient.run(...args)
 }
 import type { SentenceEmbedder } from './topics'

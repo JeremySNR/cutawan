@@ -18,7 +18,7 @@ export type Runner = (modelPath: string, inputs: Record<string, TensorData>, sig
 let client: ReturnType<typeof createInferenceClient> | undefined
 /** Own inference child, so a failure here cannot latch the one automatic framing uses. */
 const defaultRunner: Runner = (modelPath, inputs, signal) => {
-  client ??= createInferenceClient()
+  client ??= createInferenceClient(undefined, 'Speaker detection')
   return client.run(modelPath, inputs, signal)
 }
 
