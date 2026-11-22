@@ -38,6 +38,7 @@ vi.mock('../src/main/pipeline/audioAnalysis', async (importOriginal) => {
 
 import { ensureTranscript } from '../src/main/pipeline/projectTranscript'
 import { analyseSourceAudio } from '../src/main/pipeline/audioAnalysis'
+import { speakerModelPath } from '../src/main/pipeline/speakerModel'
 import { loadProject, projectDir, saveProject } from '../src/main/projects'
 import { planWindows } from '../src/main/pipeline/speakerTurns'
 
@@ -105,6 +106,15 @@ describe('fresh transcription', () => {
     expect(transcript.speakerTurns?.[1].start).toBe(words.find(w => w.start >= 14)!.start)
     expect((await loadProject(project.id)).transcript?.speakerTurns).toEqual(transcript.speakerTurns)
   })
+
+  it('does not wait for a speaker model download past the end of transcription', async () => {
+    vi.mocked(speakerModelPath).mockReturnValueOnce(new Promise(() => {})) // a hung connection
+    const project = await makeProject(null)
+    const transcript = await ensureTranscript(project, mocks.root, options, () => {})
+    expect(transcript.reactions).toHaveLength(3)
+    expect(transcript.speakerTurns).toBeUndefined()
+    expect(vi.mocked(analyseSourceAudio).mock.calls[0][0].diarize).toBeUndefined()
+  }, 30_000)
 
   it('keeps the transcript when the audio analysis fails', async () => {
     mocks.modelPath = 'model.onnx'

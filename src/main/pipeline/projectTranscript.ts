@@ -29,6 +29,12 @@ import { projectDir, updateProject } from '../projects'
 /** Share of the progress span each step of the stage accounts for. */
 const AUDIO_SHARE = 0.25
 const TRANSCRIBE_SHARE = 0.7
+/**
+ * Re-running clips on an older project waits this long for the speaker
+ * model (a cached copy verifies in ~0.1 s); a first download carries on in
+ * the background and is used next time instead of holding up the run.
+ */
+const BACKFILL_MODEL_WAIT_MS = 10_000
 /** Where the audio analyses report while the stage waits on them (after energy). */
 const ANALYSIS_FROM = 0.95
 const ANALYSIS_MESSAGE = 'Finding speakers and reactions…'
@@ -77,7 +83,8 @@ export async function ensureTranscript(
       if (want.reactions || want.speakers) {
         onProgress({ stage: 'transcribe', progress: at(1), message: ANALYSIS_MESSAGE })
         const raw = await runAudioAnalysis(project, Promise.resolve(saved.speech), want,
-          (f) => onProgress({ stage: 'transcribe', progress: at(1), message: analysisMessage(f) }), signal)
+          (f) => onProgress({ stage: 'transcribe', progress: at(1), message: analysisMessage(f) }), signal,
+          delay(BACKFILL_MODEL_WAIT_MS))
         await saveAudioAnalysis(project, saved, raw)
       }
     }
@@ -106,8 +113,10 @@ export async function ensureTranscript(
   const analysisControl = new AbortController()
   const analysisSignal = signal ? AbortSignal.any([signal, analysisControl.signal]) : analysisControl.signal
   let analysisProgress: ((fraction: number) => void) | undefined
+  let transcribed = (): void => {}
+  const transcriptReady = new Promise<void>((resolve) => { transcribed = resolve })
   const analysis = runAudioAnalysis(project, speech, { reactions: true, speakers: true },
-    (f) => analysisProgress?.(f), analysisSignal)
+    (f) => analysisProgress?.(f), analysisSignal, transcriptReady)
   analysis.catch(() => undefined) // awaited below; only cancellation rejects
   try {
     onProgress({ stage: 'audio', progress: at(0), message: 'Extracting audio…' })
@@ -143,6 +152,7 @@ export async function ensureTranscript(
       signal,
       transcriptionPlan()
     )
+    transcribed()
     if (transcript.segments.length === 0 && !options.allowNoSpeech) throw new Error(options.noSpeechError)
     transcript.speech = (await speech) ?? undefined
 
@@ -169,6 +179,7 @@ export async function ensureTranscript(
     await saveAudioAnalysis(project, transcript, await analysis)
     return transcript
   } finally {
+    transcribed()
     analysisControl.abort()
   }
 }
@@ -188,21 +199,36 @@ async function speechFor(videoPath: string, signal?: AbortSignal): Promise<Trans
 const analysisMessage = (fraction: number): string =>
   fraction > 0 && fraction < 1 ? `Finding speakers and reactions… ${Math.round(fraction * 100)}%` : ANALYSIS_MESSAGE
 
+const delay = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms).unref?.() })
+
+/**
+ * The speaker model if it is ready before `deadline`, else null. A first
+ * download is never awaited past the deadline (a slow or hung connection
+ * must not hold up the stage); it carries on and serves the next run.
+ */
+function speakerModelBefore(deadline: Promise<unknown>, signal?: AbortSignal): Promise<string | null> {
+  const model = speakerModelPath(signal)
+  model.catch(() => undefined)
+  return Promise.race([model, deadline.then(() => null)])
+}
+
 /**
  * Reactions and/or speaker turns measured over the whole source; null when
  * they could not run. Never fails the stage except on cancellation. The
- * speaker model may be downloaded here on first use (see speakerModel.ts);
- * without it, or without voice activity, diarization is skipped.
+ * speaker model may be downloaded on first use (see speakerModel.ts) and is
+ * awaited until `modelDeadline`; without it, or without voice activity,
+ * diarization is skipped this time.
  */
 export async function runAudioAnalysis(
   project: Project,
   speech: Promise<SpeechRegion[] | null | undefined>,
   want: { reactions: boolean; speakers: boolean },
   onFraction: (fraction: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  modelDeadline: Promise<unknown> = Promise.resolve()
 ): Promise<AudioAnalysisRaw | null> {
   try {
-    const [regions, modelPath] = await Promise.all([speech, want.speakers ? speakerModelPath(signal) : null])
+    const [regions, modelPath] = await Promise.all([speech, want.speakers ? speakerModelBefore(modelDeadline, signal) : null])
     const diarize = want.speakers && modelPath && regions?.length ? { speech: regions, modelPath } : undefined
     if (!want.reactions && !diarize) return null
     return await timed('audio-analysis', () => analyseSourceAudio({
