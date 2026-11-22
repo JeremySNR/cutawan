@@ -5,6 +5,7 @@ import {
   applyRefinedStart,
   checkClipOpenings,
   dedupeClips,
+  extendIntoReactions,
   penaliseHook,
   playedText,
   reviewedTime,
@@ -285,6 +286,49 @@ describe('planAnalysisWindows', () => {
     expect(shown.size).toBe(sentences.length)
   })
 
+  it('stretches each inner window edge outward to a nearby topic change, keeping the coverage', () => {
+    const sentences = build(2700)
+    const plain = planAnalysisWindows(sentences, 100)
+    // A topic change 40 s before each planned start and 30 s after each planned end.
+    const lineAt = (t: number): number => sentences.find((s) => s.start >= t)!.index
+    const fine = [...new Set(plain.slice(1).map((w) => lineAt(w.from - 40)).concat(plain.slice(0, -1).map((w) => lineAt(w.to + 30))))].sort((a, b) => a - b)
+    const windows = planAnalysisWindows(sentences, 100, 0, { fine, coarse: [] })
+    expect(windows).toHaveLength(plain.length)
+    const changeTime = (line: number): number => (sentences[line - 1].end + sentences[line].start) / 2
+    const times = fine.map(changeTime)
+    for (let i = 0; i < windows.length; i++) {
+      if (i > 0) {
+        expect(windows[i].from).toBeLessThan(plain[i].from)
+        expect(times.some((t) => Math.abs(t - windows[i].from) < 1e-9)).toBe(true)
+      }
+      if (i < windows.length - 1) {
+        expect(windows[i].to).toBeGreaterThan(plain[i].to)
+        expect(times.some((t) => Math.abs(t - windows[i].to) < 1e-9)).toBe(true)
+      }
+      // Never more than the snap distance beyond the plan.
+      expect(plain[i].from - windows[i].from).toBeLessThanOrEqual(90)
+      expect(windows[i].to - plain[i].to).toBeLessThanOrEqual(90)
+    }
+    expect(windows[0].from).toBe(sentences[0].start)
+    expect(windows[windows.length - 1].to).toBe(sentences[sentences.length - 1].end)
+    for (let start = sentences[0].start; start + 100 <= sentences[sentences.length - 1].end; start += 7.3) {
+      expect(windows.some((w) => w.from <= start && start + 100 <= w.to)).toBe(true)
+    }
+  })
+
+  it('ignores topic changes out of reach, and prefers a coarse change to a nearer fine one', () => {
+    const sentences = build(2700)
+    const plain = planAnalysisWindows(sentences, 100)
+    const lineAt = (t: number): number => sentences.find((s) => s.start >= t)!.index
+    const far = plain.slice(0, -1).map((w) => lineAt(w.to + 200))
+    expect(planAnalysisWindows(sentences, 100, 0, { fine: far, coarse: [] }).map((w) => w.to)).toEqual(plain.map((w) => w.to))
+    const end = plain[0].to
+    const near = lineAt(end + 10)
+    const major = lineAt(end + 60)
+    const [first] = planAnalysisWindows(sentences, 100, 0, { fine: [near, major], coarse: [major] })
+    expect(first.to).toBeCloseTo((sentences[major - 1].end + sentences[major].start) / 2, 6)
+  })
+
   it('drops a window that holds no speech', () => {
     const first = makeTranscript(Array.from({ length: 200 }, (_, i) => `early ${i} word three four five.`))
     const later = makeTranscript(Array.from({ length: 200 }, (_, i) => `late ${i} word three four five.`), { startSec: 3600 })
@@ -445,5 +489,45 @@ describe('length targets', () => {
     expect(lengthPenalty(125, 100)).toBe(7)
     expect(lengthPenalty(300, 100)).toBe(8)
     expect(lengthPenalty(50, 0)).toBe(0)
+  })
+})
+
+describe('extendIntoReactions', () => {
+  // Ten sentences of 2.3 s, 0.4 s apart: sentence k starts at 2.7k.
+  const transcript = makeTranscript(
+    Array.from({ length: 10 }, (_, i) => `sentence ${i} word three four five.`),
+    { wordSec: 0.3, gapSec: 0.1, sentenceGapSec: 0.4 }
+  )
+  const sentences = transcriptSentences(transcript)
+  const ending = (k: number): Clip => clip('c', sentences[1].start - 0.25, sentences[k].end + 0.25, 60)
+
+  it('runs a clip a beat into the reaction to its last line', () => {
+    // A long pause after line 4: shift the rest of the talk 5 s later.
+    const t = { ...transcript, segments: transcript.segments.map((seg) => seg.id > 4 ? { ...seg, start: seg.start + 5, end: seg.end + 5, words: seg.words.map((w) => ({ ...w, start: w.start + 5, end: w.end + 5 })) } : seg) }
+    const lines = transcriptSentences(t)
+    const reaction = { start: lines[4].end + 0.3, end: lines[4].end + 4, strength: 0.8, kind: 'laughter' as const }
+    const [out] = extendIntoReactions([ending(4)], { ...t, reactions: [reaction] }, lines, 100, 125)
+    expect(out.suggestedEnd).toBeCloseTo(reaction.start + 1.5, 6)
+    expect(out.edit.end).toBe(out.suggestedEnd)
+  })
+
+  it('never runs into the next word, past the cap, or earlier', () => {
+    const reaction = { start: sentences[4].end + 0.1, end: sentences[4].end + 4, strength: 0.8, kind: 'applause' as const }
+    const [out] = extendIntoReactions([ending(4)], { ...transcript, reactions: [reaction] }, sentences, 100, 125)
+    // The next sentence starts 0.4 s after line 4 ends.
+    expect(out.suggestedEnd).toBeCloseTo(sentences[5].start - 0.05, 6)
+    const capped = extendIntoReactions([ending(4)], { ...transcript, reactions: [{ ...reaction, start: sentences[4].end + 0.2 }] }, sentences, 100, 10)
+    expect(capped[0].suggestedEnd).toBe(ending(4).suggestedEnd)
+    const already = { ...ending(4), suggestedEnd: sentences[4].end + 3, edit: { ...ending(4).edit, end: sentences[4].end + 3 } }
+    expect(extendIntoReactions([already], { ...transcript, reactions: [reaction] }, sentences, 100, 125)[0]).toBe(already)
+  })
+
+  it('leaves clips alone without a reaction to their last line', () => {
+    const c = ending(4)
+    const quiet = { start: sentences[4].end + 0.1, end: sentences[4].end + 4, strength: 0.1, kind: 'laughter' as const }
+    const music = { ...quiet, strength: 0.9, kind: 'music' as const }
+    const elsewhere = { ...quiet, strength: 0.9, start: sentences[7].end + 0.1, end: sentences[7].end + 3 }
+    expect(extendIntoReactions([c], { ...transcript, reactions: [quiet, music, elsewhere] }, sentences, 100, 125)[0]).toBe(c)
+    expect(extendIntoReactions([c], transcript, sentences, 100, 125)[0]).toBe(c)
   })
 })

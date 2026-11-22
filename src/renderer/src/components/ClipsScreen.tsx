@@ -24,6 +24,7 @@ import { findWholeVideoClip, highlightClips } from '@shared/wholeVideo'
 import { editedClipDuration } from '@shared/tighten'
 import { layoutReviewMessage } from '@shared/contentType'
 import { editorialAssessmentCurrent, editorialReportMatchesClips } from '@shared/editorialRanking'
+import { CLIP_KIND_LABELS } from '@shared/clipVariety'
 
 export default function ClipsScreen(): React.JSX.Element {
   const project = useStore((s) => s.project)
@@ -190,6 +191,14 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
             #{rank}
           </span>
           <EditorialScore clip={clip} current={assessmentCurrent} />
+          {clip.kind && (
+            <span
+              data-testid="clip-kind"
+              className="rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-medium text-zinc-300 backdrop-blur"
+            >
+              {CLIP_KIND_LABELS[clip.kind]}
+            </span>
+          )}
         </div>
         <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5">
           {framing && (
