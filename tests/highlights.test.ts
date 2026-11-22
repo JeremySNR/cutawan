@@ -4,6 +4,7 @@ import {
   applyRefinedStart,
   dedupeClips,
   formatTranscriptForModel,
+  planAnalysisWindows,
   snapClipEnd,
   snapClipStart,
   targetClipCount
@@ -229,5 +230,58 @@ describe('formatTranscriptForModel', () => {
     expect(lines[0]).toMatch(/^\[0\.0s - 0\.7s\] Loud one\. \[delivery: energetic\]$/)
     expect(lines[1]).not.toContain('[delivery')
     expect(lines[2]).toContain('[delivery: subdued]')
+  })
+})
+
+describe('planAnalysisWindows', () => {
+  const build = (count: number) => transcriptSentences(makeTranscript(
+    Array.from({ length: count }, (_, i) => `sentence ${i} word three four five.`),
+    { wordSec: 0.3, gapSec: 0.1, sentenceGapSec: 0.4 }
+  ))
+
+  it('keeps a short transcript in one window', () => {
+    const sentences = build(300) // 13.5 minutes
+    const windows = planAnalysisWindows(sentences, 100)
+    expect(windows).toHaveLength(1)
+    expect(windows[0].sentences).toBe(sentences)
+  })
+
+  it('returns nothing for an empty transcript', () => {
+    expect(planAnalysisWindows([], 100)).toEqual([])
+  })
+
+  it('covers a long transcript with equal windows that overlap by more than a clip', () => {
+    const sentences = build(2700) // about two hours
+    const windows = planAnalysisWindows(sentences, 100)
+    expect(windows.length).toBeGreaterThan(8)
+    expect(windows[0].from).toBe(sentences[0].start)
+    expect(windows[windows.length - 1].to).toBe(sentences[sentences.length - 1].end)
+    const lengths = windows.map((w) => w.to - w.from)
+    expect(Math.max(...lengths) - Math.min(...lengths)).toBeLessThan(1)
+    expect(Math.max(...lengths)).toBeLessThanOrEqual(12 * 60 + 1)
+    for (let i = 1; i < windows.length; i++) {
+      expect(windows[i - 1].to - windows[i].from).toBeGreaterThanOrEqual(130 - 1e-6)
+    }
+    // Any clip up to the cap, wherever it sits, is wholly inside some window.
+    for (let start = sentences[0].start; start + 100 <= sentences[sentences.length - 1].end; start += 7.3) {
+      expect(windows.some((w) => w.from <= start && start + 100 <= w.to)).toBe(true)
+    }
+    // Every sentence is shown to the model at least once.
+    const shown = new Set(windows.flatMap((w) => w.sentences.map((s) => s.index)))
+    expect(shown.size).toBe(sentences.length)
+  })
+
+  it('drops a window that holds no speech', () => {
+    const first = makeTranscript(Array.from({ length: 200 }, (_, i) => `early ${i} word three four five.`))
+    const later = makeTranscript(Array.from({ length: 200 }, (_, i) => `late ${i} word three four five.`), { startSec: 3600 })
+    const sentences = transcriptSentences({
+      ...first,
+      durationSec: later.durationSec,
+      segments: [...first.segments, ...later.segments.map((seg) => ({ ...seg, id: seg.id + 200 }))]
+    })
+    const windows = planAnalysisWindows(sentences, 100)
+    expect(windows.every((w) => w.sentences.length > 0)).toBe(true)
+    expect(windows.map((w) => w.index)).toEqual(windows.map((_, i) => i))
+    expect(windows.length).toBeLessThan(Math.ceil(later.durationSec / (12 * 60 - 130)))
   })
 })

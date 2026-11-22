@@ -6,6 +6,28 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
+## [Unreleased]
+
+### Added
+
+- Every clip's score now shows what it is made of: hook, emotion, value, flow and shareability, plus the visual review. Clip cards show a letter for each, and the editor shows the numbers under **Why this clip**. Clips found before this update keep their old score, marked "Legacy score"; regenerate to see the breakdown.
+- Rest the pointer on a clip card to play that moment, muted, without opening the editor.
+
+### Improved
+
+- Better clips from long videos. Past about twenty minutes of speech, the transcript is now analysed in overlapping parts instead of one request, so the middle and end of a two-hour recording get the same attention as the opening. The best clips across all parts are kept. On API connections this adds a few cents of analysis per hour of video. ChatGPT sign-in still sends the whole transcript in one request, because its requests count against a daily cap.
+- Scores are more spread out and more consistent between runs. The AI scores each part of the rubric separately and Cutawan adds them up, instead of asking for a single overall number.
+- Faster transcription of long videos on hosted APIs (OpenAI, OpenRouter, Groq and similar): up to three parts of the audio are transcribed at once. Local Whisper, and a Whisper server on your own machine or network, still run one part at a time.
+- Faster clip review on API connections: up to four clips are checked at once instead of two.
+- On API connections, clip endings and openings are reviewed a few clips at a time rather than all in one request, which makes the review more reliable when there are many clips.
+- **Open on the hook** is now on by default on API connections, so clips start on their hook line rather than the setup before it. Turn it off on the setup screen to keep the earlier behaviour. It stays off by default on ChatGPT sign-in, where it costs one of the day's requests.
+- Captions in the big-word styles no longer show commas and full stops, which cluttered three-word cards ("WORKS." / "SO,"). Question marks, exclamation marks and ellipses stay. The subtitle-like styles (Minimal and Whisper) keep full punctuation. The preview and the export match.
+- The progress screen says which part of a long video is being analysed and when endings and openings are being checked.
+
+### Validation
+
+- Covered by automated tests with scripted model replies and by the offline render tests. The new long-video analysis, scoring and parallel transcription were not run against a live AI provider in this change.
+
 ## [0.14.0] - 2026-10-13
 
 ### Added

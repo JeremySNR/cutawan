@@ -161,6 +161,17 @@ export interface BrollItem {
   enabled: boolean
 }
 
+/** Per-part scores from the clip-selection rubric, each on its own scale. */
+export interface ScoreBreakdown {
+  hook: number
+  emotion: number
+  value: number
+  structure: number
+  shareability: number
+  /** Visual review score (0-99) blended into the final score; absent until it runs. */
+  visual?: number
+}
+
 export interface Clip {
   id: string
   /**
@@ -182,6 +193,12 @@ export interface Clip {
   caption?: string | null
   viralityScore: number
   viralityReason: string
+  /**
+   * The rubric parts behind `viralityScore` (see shared/scoreBreakdown.ts).
+   * Absent on clips found before parts were recorded, on visual-only
+   * suggestions, and when the model did not return them.
+   */
+  scoreBreakdown?: ScoreBreakdown
   /** One-line LLM assessment of what the visuals add/cost; null until scored. */
   visualSummary: string | null
   /** Visual action explicitly retained when speech-based tightening removes pauses. */

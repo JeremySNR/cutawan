@@ -297,8 +297,10 @@ function SetupPanel(): React.JSX.Element {
   const [videoType, setVideoType] = useState<VideoType>(project.videoType ?? 'auto')
   // Off by default: B-roll costs extra LLM/image calls and splits opinion.
   const [broll, setBroll] = useState(false)
-  // Off by default: hook-first trimming rewrites clip starts with an extra LLM pass.
-  const [hookFirst, setHookFirst] = useState(false)
+  // On by default: the opening seconds decide whether a clip is watched. It
+  // costs one more analysis request, so it stays opt-in on ChatGPT sign-in,
+  // where requests count against a small daily cap.
+  const [hookFirst, setHookFirst] = useState(settings?.subscription.provider !== 'chatgpt')
   const [visualDiscovery, setVisualDiscovery] = useState(project.visualDiscovery ?? false)
   const [editorialRanking, setEditorialRanking] = useState(project.rankingEnabled ?? false)
 

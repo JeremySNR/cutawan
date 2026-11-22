@@ -196,7 +196,8 @@ export async function analyzeProject(
       transcript,
       options,
       project.video.durationSec,
-      signal
+      signal,
+      ({ fraction, message }) => onProgress({ stage: 'analyze', progress: 0.6 + fraction * 0.04, message })
     )) : []
     for (const clip of clips) clip.discovery = { origin: 'transcript' }
     clips.push(...visualClips)
@@ -211,7 +212,7 @@ export async function analyzeProject(
     let scored = 0
     const incomplete = new Set<string>()
     const incoherent = new Set<string>()
-    await timed('visual-review', () => mapLimit(clips, 3, async (clip) => {
+    await timed('visual-review', () => mapLimit(clips, 4, async (clip) => {
       signal?.throwIfAborted()
       let visual = await assessClipVisuals(
         apiKey,
@@ -233,6 +234,7 @@ export async function analyzeProject(
       }
       if (visual) {
         if (visual.storyIssue) incoherent.add(clip.id)
+        if (clip.scoreBreakdown) clip.scoreBreakdown = { ...clip.scoreBreakdown, visual: visual.visualScore }
         clip.viralityScore = ensembleScore(clip.viralityScore, visual.visualScore)
         clip.visualSummary = visual.visualSummary
         clip.visualLayout = visual.visualLayout

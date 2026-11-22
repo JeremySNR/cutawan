@@ -49,13 +49,14 @@ function makeTranscript(durationSec: number): Transcript {
   return { language: 'english', durationSec, segments }
 }
 
-const DEMO_CLIPS: Array<Pick<Clip, 'title' | 'hook' | 'summary' | 'viralityScore' | 'viralityReason' | 'hashtags'> & { start: number; end: number }> = [
+const DEMO_CLIPS: Array<Pick<Clip, 'title' | 'hook' | 'summary' | 'viralityScore' | 'viralityReason' | 'scoreBreakdown' | 'hashtags'> & { start: number; end: number }> = [
   {
     start: 14, end: 38,
     title: 'One clip changes everything overnight',
     hook: 'This is how creators actually blow up…',
     summary: 'The turning point every consistent creator eventually hits, and why it feels sudden.',
     viralityScore: 91,
+    scoreBreakdown: { hook: 28, emotion: 23, value: 18, structure: 14, shareability: 8 },
     viralityReason: 'Strong curiosity hook, emotionally resonant payoff and a complete standalone arc.',
     hashtags: ['creator', 'growth', 'contentstrategy']
   },
@@ -65,6 +66,7 @@ const DEMO_CLIPS: Array<Pick<Clip, 'title' | 'hook' | 'summary' | 'viralityScore
     hook: 'Nobody tells you this about growing an audience',
     summary: 'A blunt reframe of early content as reps, not results.',
     viralityScore: 84,
+    scoreBreakdown: { hook: 27, emotion: 20, value: 16, structure: 13, shareability: 8 },
     viralityReason: 'Contrarian opening line with high shareability among aspiring creators.',
     hashtags: ['contentcreator', 'mindset', 'audience']
   },
@@ -74,6 +76,7 @@ const DEMO_CLIPS: Array<Pick<Clip, 'title' | 'hook' | 'summary' | 'viralityScore
     hook: 'Stop blaming the algorithm',
     summary: 'Why the algorithm ignores new creators and how to feed it evidence.',
     viralityScore: 76,
+    scoreBreakdown: { hook: 24, emotion: 17, value: 17, structure: 12, shareability: 6 },
     viralityReason: 'Debunks a common excuse; strong discussion bait, slightly less emotional peak.',
     hashtags: ['algorithm', 'shorts', 'tiktokgrowth']
   },
@@ -83,6 +86,7 @@ const DEMO_CLIPS: Array<Pick<Clip, 'title' | 'hook' | 'summary' | 'viralityScore
     hook: 'Post daily. Watch the data.',
     summary: 'The practical posting system: daily clips from long-form content.',
     viralityScore: 63,
+    scoreBreakdown: { hook: 17, emotion: 13, value: 18, structure: 11, shareability: 4 },
     viralityReason: 'Actionable advice but a softer hook and less standalone tension.',
     hashtags: ['contentplan', 'repurposing', 'advice']
   }
@@ -124,6 +128,7 @@ async function main(): Promise<void> {
       summary: d.summary,
       viralityScore: d.viralityScore,
       viralityReason: d.viralityReason,
+      scoreBreakdown: d.scoreBreakdown,
       visualSummary: null,
       hashtags: d.hashtags,
       thumbnailPath,

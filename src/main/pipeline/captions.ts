@@ -7,6 +7,7 @@ import type { FontMetrics } from '../fonts'
 import {
   CAPTION_SAFE_WIDTH,
   captionLayoutBudget,
+  captionWordText,
   groupDisplayEnd,
   groupWords,
   wordsInRange,
@@ -70,8 +71,7 @@ function renderGroupText(group: WordGroup, activeIndex: number, style: CaptionSt
   for (const line of group.lines) {
     const parts: string[] = []
     for (const word of line) {
-      const raw = escapeAss(word.text)
-      const text = style.uppercase ? raw.toUpperCase() : raw
+      const text = escapeAss(captionWordText(word.text, style))
       if (index === activeIndex) {
         const pop = '\\t(0,70,\\fscx109\\fscy109)'
         if (style.highlightBoxColor) {

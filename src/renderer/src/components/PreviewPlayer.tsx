@@ -4,6 +4,7 @@ import type { Clip, Project, WatermarkPosition } from '@shared/types'
 import { hexToRgba, resolveCaptionStyle } from '@shared/captionStyles'
 import {
   captionLayoutBudget,
+  captionWordText,
   groupDisplayEnd,
   groupWords,
   wordsInRange
@@ -535,7 +536,7 @@ function CaptionOverlay({
           {line.map((w, wi) => {
             const wordIndex = index++
             const active = wordIndex === activeIdx
-            const text = style.uppercase ? w.text.toUpperCase() : w.text
+            const text = captionWordText(w.text, style)
             return (
               <span
                 key={`${w.start}-${wordIndex}`}

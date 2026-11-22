@@ -7,14 +7,16 @@ export default function ScoreBadge({
   size = 'sm'
 }: {
   score: number
-  kind?: 'editorial' | 'legacy'
+  kind?: 'editorial' | 'score' | 'legacy'
   size?: 'sm' | 'lg'
 }): React.JSX.Element {
   const color = scoreColor(score)
-  const label = kind === 'editorial' ? 'Editorial' : 'Legacy score'
+  const label = kind === 'editorial' ? 'Editorial' : kind === 'score' ? 'Score' : 'Legacy score'
   const description = kind === 'editorial'
     ? `Editorial assessment: ${score} out of 100. Audience performance and the exported video have not been verified.`
-    : `Legacy AI score: ${score} out of 99. Regenerate to apply the current editorial assessment.`
+    : kind === 'score'
+      ? `AI score: ${score} out of 99, from the hook, emotion, value, flow, shareability and visuals. An estimate of editorial quality, not a prediction of views.`
+      : `Legacy AI score: ${score} out of 99. Regenerate to see what the score is made of.`
   if (size === 'lg') {
     return (
       <div

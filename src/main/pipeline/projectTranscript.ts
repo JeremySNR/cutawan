@@ -1,6 +1,6 @@
 import type { PipelineProgress, Project, Transcript } from '@shared/types'
 import { AUDIO_CHUNK_SEC, extractAudioChunks } from './ffmpeg'
-import { transcriptionChunkSec } from './openai'
+import { transcriptionChunkSec, transcriptionPlan } from './openai'
 import { transcribeChunks } from './transcribe'
 import { annotateEnergy } from './energy'
 import { detectSpeech, vadAvailable } from './vad'
@@ -105,7 +105,8 @@ export async function ensureTranscript(
             ? `Transcribing (part ${Math.min(chunks.length, Math.ceil(f * chunks.length))}/${chunks.length})…`
             : 'Transcribing with Whisper…'
       }),
-    signal
+    signal,
+    transcriptionPlan()
   )
   if (transcript.segments.length === 0 && !options.allowNoSpeech) throw new Error(options.noSpeechError)
   transcript.speech = (await speech) ?? undefined

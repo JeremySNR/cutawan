@@ -35,3 +35,19 @@ it('releases capacity after failure and adapts when the device budget changes', 
   await Promise.all([queue.run(work), queue.run(work)])
   expect(peak).toBe(1)
 })
+
+it('never exceeds its own ceiling, whatever the device budget reports', async () => {
+  let count = 0, peak = 0
+  const work = async (): Promise<void> => {
+    count++; peak = Math.max(count, peak)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    count--
+  }
+  const narrow = new MediaQueue(() => 8)
+  await Promise.all(Array.from({ length: 6 }, () => narrow.run(work)))
+  expect(peak).toBe(2)
+  peak = 0
+  const wide = new MediaQueue(() => 8, 4)
+  await Promise.all(Array.from({ length: 6 }, () => wide.run(work)))
+  expect(peak).toBe(4)
+})

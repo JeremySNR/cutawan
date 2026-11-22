@@ -1,11 +1,14 @@
-import { throwIfSubscriptionError } from '../subscription'
+import { throwIfSubscriptionError, usesSubscription } from '../subscription'
 import { randomUUID } from 'node:crypto'
 import type {
   AnalyzeOptions,
   Clip,
   ClipLengthPreference,
+  ScoreBreakdown,
   Transcript
 } from '@shared/types'
+import { SCORE_PARTS, normalizeScoreParts, scoreFromParts } from '@shared/scoreBreakdown'
+import { mapLimit } from './concurrency'
 import { DEFAULT_CAPTION_STYLE_ID } from '@shared/captionStyles'
 import { initialClipEditForVideoType } from '@shared/videoType'
 import {
@@ -26,6 +29,8 @@ interface RawHighlight {
   hook: string
   summary: string
   payoff: string
+  /** Rubric components; absent from models that ignore the schema. */
+  score_parts?: Partial<Record<keyof ScoreBreakdown, number>>
   virality_score: number
   virality_reason: string
   hashtags: string[]
@@ -52,6 +57,7 @@ const RESPONSE_SCHEMA = {
           'hook',
           'summary',
           'payoff',
+          'score_parts',
           'virality_score',
           'virality_reason',
           'hashtags'
@@ -73,9 +79,18 @@ const RESPONSE_SCHEMA = {
             description:
               'The closing line or idea the clip ends on and why it lands (resolution, punchline, answer, takeaway, or pointed question). A clip whose ending does not land should not be selected.'
           },
+          score_parts: {
+            type: 'object',
+            additionalProperties: false,
+            required: SCORE_PARTS.map((part) => part.key),
+            description: 'The rubric components, each scored on its own scale before anything is summed',
+            properties: Object.fromEntries(
+              SCORE_PARTS.map((part) => [part.key, { type: 'integer', description: `${part.rubric} (0-${part.max})` }])
+            )
+          },
           virality_score: {
             type: 'integer',
-            description: 'Predicted engagement 0-99 using the scoring rubric'
+            description: 'The sum of score_parts (0-99)'
           },
           virality_reason: {
             type: 'string',
@@ -206,7 +221,7 @@ Virality scoring rubric (0-99), grounded in sharing research (Berger & Milkman 2
 - Value — practical utility the viewer can apply, or novel insight that makes the sharer look smart (0-20)
 - Structure — a clear hook -> build -> landing arc; a clip that is just a statement, or whose final sentence is setup rather than a landing, scores 0 here (0-15)
 - Shareability — would someone tag a friend, argue in the comments, or repost to signal identity? (0-9)
-Sum the parts for the final score. Be honest and discriminating: most clips score 40-75, reserve 85+ for exceptional moments.`
+Score each part separately in score_parts, on its own scale, before summing; the final score is their sum. Be honest and discriminating: most clips score 40-75, reserve 85+ for exceptional moments. A clip is rarely strong on every part — give each part the number it earns rather than spreading one overall impression across all five.`
 
 /**
  * How many clips to ask the LLM for: roughly one per minute of source video.
@@ -375,7 +390,7 @@ export function applyRefinedEnding(
  * the first pass reliably finds hooks but often stops on setup. Failures
  * never break the pipeline; the unrefined clips are returned instead.
  */
-async function refineClipEndings(
+async function refineEndingBatch(
   apiKey: string,
   model: string,
   transcript: Transcript,
@@ -520,7 +535,7 @@ export function applyRefinedStart(clip: Clip, betterStart: number, sentenceStart
  * sentence or two of throat-clearing before them. Failures never break the
  * pipeline; the unrefined clips are returned instead.
  */
-async function refineClipStarts(
+async function refineStartBatch(
   apiKey: string,
   model: string,
   transcript: Transcript,
@@ -581,6 +596,57 @@ async function refineClipStarts(
 }
 
 /**
+ * ChatGPT sign-in counts every request against a small daily cap and never
+ * retries one, so on that route the analysis keeps to the fewest requests it
+ * can: one for the whole transcript and one per review, however long the
+ * video. Splitting the work is for connections where a request is cheap.
+ */
+function requestsAreScarce(): boolean {
+  return usesSubscription()
+}
+
+/**
+ * Run a review over the clips in small batches, a few at a time. One request
+ * judging forty clips returns forty verdicts that must each line up with the
+ * right clip, and it is the long lists where a model skips or misnumbers
+ * entries; batches keep every request short and let them overlap.
+ */
+async function reviewInBatches(clips: Clip[], review: (batch: Clip[]) => Promise<Clip[]>): Promise<Clip[]> {
+  if (clips.length <= REVIEW_BATCH_SIZE || requestsAreScarce()) return review(clips)
+  const batchCount = Math.ceil(clips.length / REVIEW_BATCH_SIZE)
+  const size = Math.ceil(clips.length / batchCount)
+  const batches = Array.from({ length: batchCount }, (_, i) => clips.slice(i * size, (i + 1) * size))
+  const reviewed: Clip[][] = new Array(batches.length)
+  await mapLimit(batches, WINDOW_CONCURRENCY, async (batch, i) => {
+    reviewed[i] = await review(batch)
+  })
+  return reviewed.flat()
+}
+
+function refineClipEndings(
+  apiKey: string,
+  model: string,
+  transcript: Transcript,
+  clips: Clip[],
+  videoDurationSec: number,
+  maxDuration: number,
+  signal?: AbortSignal
+): Promise<Clip[]> {
+  return reviewInBatches(clips, (batch) =>
+    refineEndingBatch(apiKey, model, transcript, batch, videoDurationSec, maxDuration, signal))
+}
+
+function refineClipStarts(
+  apiKey: string,
+  model: string,
+  transcript: Transcript,
+  clips: Clip[],
+  signal?: AbortSignal
+): Promise<Clip[]> {
+  return reviewInBatches(clips, (batch) => refineStartBatch(apiKey, model, transcript, batch, signal))
+}
+
+/**
  * Drop clips that substantially overlap a higher-scored clip, so the results
  * grid never shows two near-identical moments. Input must be sorted by score
  * descending. Exported for tests.
@@ -601,26 +667,129 @@ export function dedupeClips(clips: Clip[], maxOverlapFraction = 0.4): Clip[] {
   return kept
 }
 
+/**
+ * Transcripts up to this long go to the model in one request. Past it the
+ * selection is made window by window: one request holding a two-hour
+ * transcript has to produce forty clips from a context where the middle
+ * hour gets far less attention than the opening, and its picks thin out
+ * accordingly.
+ */
+const SINGLE_PASS_MAX_SEC = 20 * 60
+/** Roughly how much speech one window holds. */
+const WINDOW_TARGET_SEC = 12 * 60
+/** Slack on top of the longest clip in the overlap between two windows. */
+const WINDOW_OVERLAP_SLACK_SEC = 30
+/** Windows analysed at once. */
+const WINDOW_CONCURRENCY = 3
+/** Clips judged per ending/opening review request. */
+const REVIEW_BATCH_SIZE = 8
+
+export interface AnalysisWindow {
+  /** Position among the windows, 0-based. */
+  index: number
+  /** Source seconds the window covers. */
+  from: number
+  to: number
+  sentences: Sentence[]
+}
+
+/**
+ * Split a long transcript into overlapping windows for clip selection.
+ *
+ * Neighbouring windows overlap by more than the longest clip allowed, so
+ * every possible clip lies wholly inside at least one window and a moment
+ * that straddles a boundary is never invisible. The duplicates that overlap
+ * produces are removed by `dedupeClips`. Windows are equal in length rather
+ * than fixed-size with a stub at the end, and a window with no speech (a
+ * music break) is dropped. Returns one window when the speech is short
+ * enough for a single request. Exported for tests.
+ */
+export function planAnalysisWindows(sentences: Sentence[], maxClipSec: number): AnalysisWindow[] {
+  if (sentences.length === 0) return []
+  const from = sentences[0].start
+  const to = sentences[sentences.length - 1].end
+  const span = to - from
+  if (span <= SINGLE_PASS_MAX_SEC) return [{ index: 0, from, to, sentences }]
+
+  const overlap = maxClipSec + WINDOW_OVERLAP_SLACK_SEC
+  const count = Math.ceil((span - overlap) / (WINDOW_TARGET_SEC - overlap))
+  const length = (span + (count - 1) * overlap) / count
+  const windows: AnalysisWindow[] = []
+  for (let i = 0; i < count; i++) {
+    const start = from + i * (length - overlap)
+    const end = i === count - 1 ? to : start + length
+    const inside = sentences.filter((s) => s.end > start && s.start < end)
+    if (inside.length > 0) windows.push({ index: windows.length, from: start, to: end, sentences: inside })
+  }
+  return windows
+}
+
+/** How many clips to ask one window for: about one per minute it covers. */
+function windowClipCount(window: AnalysisWindow): number {
+  return Math.max(3, Math.min(12, Math.round((window.to - window.from) / 60)))
+}
+
+export interface HighlightProgress {
+  /** 0..1 across the whole highlight pass. */
+  fraction: number
+  message: string
+}
+
+/** Share of the highlight pass spent finding moments; the rest is the reviews. */
+const FIND_SHARE = 0.7
+
 export async function detectHighlights(
   apiKey: string,
   model: string,
   transcript: Transcript,
   options: AnalyzeOptions,
   videoDurationSec: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (progress: HighlightProgress) => void
 ): Promise<Clip[]> {
+  const maxDuration = maxDurationFor(options.clipLength)
+  // One sentence per line. Whisper segments break mid-sentence, and a model
+  // that only sees segment boundaries can only propose segment boundaries;
+  // sentence lines let it cut where a thought actually starts and stops.
+  const sentences = transcriptSentences(transcript)
+  const windows = requestsAreScarce() && sentences.length > 0
+    ? [{ index: 0, from: sentences[0].start, to: sentences[sentences.length - 1].end, sentences }]
+    : planAnalysisWindows(sentences, maxDuration)
+  const windowed = windows.length > 1
+
+  const find = async (insist: boolean): Promise<Clip[]> => {
+    const found: Clip[][] = new Array(windows.length)
+    let finished = 0
+    await mapLimit(windows, WINDOW_CONCURRENCY, async (window, i) => {
+      signal?.throwIfAborted()
+      found[i] = await requestHighlights(apiKey, model, transcript, sentences, options, videoDurationSec, {
+        insist,
+        window: windowed ? { ...window, count: windows.length } : null
+      }, signal)
+      finished++
+      onProgress?.({
+        fraction: (finished / windows.length) * FIND_SHARE,
+        message: windowed ? `Finding spoken moments (${finished}/${windows.length})…` : 'Finding spoken moments…'
+      })
+    })
+    const clips = found.flat().sort((a, b) => b.viralityScore - a.viralityScore)
+    // Overlapping windows propose the same moment twice; keep the better take.
+    // Then hold the list to the size a single request would have been asked
+    // for, so every later per-clip stage costs what it did before.
+    return windowed ? dedupeClips(clips).slice(0, targetClipCount(videoDurationSec)) : clips
+  }
+
   // LLM output is nondeterministic: occasionally it returns an empty list on
   // perfectly clippable material, so retry once with a firmer instruction.
-  const first = await requestHighlights(apiKey, model, transcript, options, videoDurationSec, false, signal)
-  const clips =
-    first.length > 0
-      ? first
-      : await requestHighlights(apiKey, model, transcript, options, videoDurationSec, true, signal)
-  const maxDuration = maxDurationFor(options.clipLength)
+  const first = await find(false)
+  const clips = first.length > 0 ? first : await find(true)
+  onProgress?.({ fraction: FIND_SHARE, message: 'Checking clip endings…' })
   const refined = await refineClipEndings(apiKey, model, transcript, clips, videoDurationSec, maxDuration, signal)
+  if (options.hookFirst) onProgress?.({ fraction: (1 + FIND_SHARE) / 2, message: 'Checking clip openings…' })
   const trimmed = options.hookFirst
     ? await refineClipStarts(apiKey, model, transcript, refined, signal)
     : refined
+  onProgress?.({ fraction: 1, message: 'Finding spoken moments…' })
   // Refinement can pull two clips onto the same landing beat; dedupe again.
   return dedupeClips(trimmed.filter((c) =>
     Number.isFinite(c.edit.start) && Number.isFinite(c.edit.end) &&
@@ -629,29 +798,38 @@ export async function detectHighlights(
   ))
 }
 
+interface HighlightRequest {
+  insist: boolean
+  /** The part of a long transcript this request covers; null for the whole of it. */
+  window: (AnalysisWindow & { count: number }) | null
+}
+
 async function requestHighlights(
   apiKey: string,
   model: string,
   transcript: Transcript,
+  sentences: Sentence[],
   options: AnalyzeOptions,
   videoDurationSec: number,
-  insist: boolean,
+  request: HighlightRequest,
   signal?: AbortSignal
 ): Promise<Clip[]> {
-  // One sentence per line. Whisper segments break mid-sentence, and a model
-  // that only sees segment boundaries can only propose segment boundaries;
-  // sentence lines let it cut where a thought actually starts and stops.
-  const sentences = transcriptSentences(transcript)
-  const transcriptText = formatTranscriptForModel(sentences)
+  const { insist, window } = request
+  const shown = window ? window.sentences : sentences
+  const transcriptText = formatTranscriptForModel(shown)
 
-  const targetCount = targetClipCount(videoDurationSec)
+  const targetCount = window ? windowClipCount(window) : targetClipCount(videoDurationSec)
+  const scope = window ? 'this part' : 'the whole video'
 
   const userPrompt = [
     `Video duration: ${videoDurationSec.toFixed(1)} seconds.`,
+    window
+      ? `This is part ${window.index + 1} of ${window.count} of the transcript, covering ${formatTimestamp(window.from)} to ${formatTimestamp(window.to)}; the other parts are analysed separately. Choose clips only from the lines below, and score them on the rubric's absolute scale so they can be ranked against clips from the other parts: an ordinary part of the video should produce ordinary scores.`
+      : '',
     lengthGuidance(options.clipLength),
     insist
       ? 'You MUST return at least 3 clips. Even if no moment feels exceptional, select the 3 strongest available moments and score them honestly (low scores are fine). All timestamps are in seconds from the start of the video. Express "start" and "end" as plain seconds (e.g. 132.4).'
-      : `Aim for about ${targetCount} clips spread across the whole video. Be generous: return every distinct moment strong enough to stand alone as a clip and let honest scores rank them — err on the side of more clips rather than fewer (at least ${Math.min(4, targetCount)}; fewer only if the material genuinely cannot support more). All timestamps are in seconds from the start of the video. Express "start" and "end" as plain seconds (e.g. 132.4).`,
+      : `Aim for about ${targetCount} clips spread across ${scope}. Be generous: return every distinct moment strong enough to stand alone as a clip and let honest scores rank them — err on the side of more clips rather than fewer (at least ${Math.min(4, targetCount)}; fewer only if the material genuinely cannot support more). All timestamps are in seconds from the start of the video. Express "start" and "end" as plain seconds (e.g. 132.4).`,
     options.prompt.trim()
       ? `The creator gave these special instructions, which take priority when choosing moments: "${options.prompt.trim()}"`
       : '',
@@ -726,6 +904,9 @@ async function requestHighlights(
       continue
     }
     const typeDefaults = initialClipEditForVideoType(options.videoType)
+    // The parts are summed here rather than trusting the model's own total.
+    const parts = normalizeScoreParts(raw.score_parts)
+    const fallbackScore = Number.isFinite(raw.virality_score) ? Math.round(raw.virality_score) : 0
     clips.push({
       id: randomUUID(),
       suggestedStart: start,
@@ -733,8 +914,9 @@ async function requestHighlights(
       title: raw.title,
       hook: raw.hook,
       summary: raw.summary,
-      viralityScore: Math.max(0, Math.min(99, Math.round(raw.virality_score))),
+      viralityScore: parts ? scoreFromParts(parts) : Math.max(0, Math.min(99, fallbackScore)),
       viralityReason: raw.virality_reason,
+      ...(parts ? { scoreBreakdown: parts } : {}),
       visualSummary: null,
       hashtags: (raw.hashtags ?? []).map((h) => h.replace(/^#/, '').toLowerCase()),
       thumbnailPath: null,

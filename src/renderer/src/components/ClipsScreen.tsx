@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Download,
   Pencil,
@@ -147,6 +147,10 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
   const transcript = useStore((s) => s.project?.transcript ?? null)
   const duration = useMemo(() => editedClipDuration(clip, transcript), [clip, transcript])
   const assessmentCurrent = useMemo(() => editorialAssessmentCurrent(clip, transcript), [clip, transcript])
+  const videoPath = useStore((s) => s.project?.video.path)
+  const [previewing, setPreviewing] = useState(false)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(hoverTimer.current), [])
 
   return (
     <div className="group overflow-hidden rounded-2xl border border-surface-700 bg-surface-900 transition hover:border-surface-600">
@@ -154,6 +158,14 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
         data-testid="clip-thumb"
         className="relative aspect-video cursor-pointer bg-black"
         onClick={() => openEditor(clip.id)}
+        onMouseEnter={() => {
+          // A pointer crossing the grid should not start a decoder per card.
+          hoverTimer.current = setTimeout(() => setPreviewing(true), HOVER_PREVIEW_DELAY_MS)
+        }}
+        onMouseLeave={() => {
+          clearTimeout(hoverTimer.current)
+          setPreviewing(false)
+        }}
       >
         {clip.thumbnailPath ? (
           <img
@@ -163,6 +175,14 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
           />
         ) : (
           <div className="h-full w-full bg-surface-800" />
+        )}
+        {previewing && videoPath && (
+          <HoverPreview
+            src={window.cutawan.mediaUrl(videoPath)}
+            start={clip.edit.start}
+            end={clip.edit.end}
+            onFailed={() => setPreviewing(false)}
+          />
         )}
         <div className="absolute left-2.5 top-2.5 flex items-center gap-2">
           <span className="rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-semibold text-zinc-300 backdrop-blur">
@@ -217,6 +237,48 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
         </div>
       </div>
     </div>
+  )
+}
+
+/** How long the pointer must rest on a card before its preview starts. */
+const HOVER_PREVIEW_DELAY_MS = 180
+
+/**
+ * Plays the clip's span of the source, muted, over its thumbnail while the
+ * pointer rests on the card. It is the uncropped source, the same picture as
+ * the thumbnail — enough to hear nothing and still tell which moment this is
+ * without opening the editor. The element exists only while hovering, so an
+ * idle grid holds no decoders.
+ */
+function HoverPreview({ src, start, end, onFailed }: {
+  src: string
+  start: number
+  end: number
+  onFailed: () => void
+}): React.JSX.Element {
+  const [ready, setReady] = useState(false)
+  return (
+    <video
+      data-testid="clip-hover-preview"
+      src={src}
+      muted
+      playsInline
+      preload="auto"
+      className={`pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity duration-150 ${ready ? 'opacity-100' : 'opacity-0'}`}
+      onLoadedMetadata={(e) => {
+        e.currentTarget.currentTime = start
+      }}
+      onSeeked={(e) => {
+        // Shown only once the frame at the clip start is decoded, so the
+        // source's first frame never flashes over the thumbnail.
+        setReady(true)
+        void e.currentTarget.play().catch(() => undefined)
+      }}
+      onTimeUpdate={(e) => {
+        if (e.currentTarget.currentTime >= end) e.currentTarget.currentTime = start
+      }}
+      onError={onFailed}
+    />
   )
 }
 
