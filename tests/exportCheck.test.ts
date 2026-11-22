@@ -5,7 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Clip, Transcript, VideoInfo } from '@shared/types'
 import { exportCheckSummary } from '@shared/exportCheck'
 import { probeVideo, runFfmpeg } from '../src/main/pipeline/ffmpeg'
-import { checkExport, judgeExport, midWordCuts, parseAnalysis, type CheckContext, type ExportAnalysis } from '../src/main/pipeline/exportCheck'
+import { checkExport, judgeExport, midWordCuts, parseAnalysis, protectedOutputRanges, type CheckContext, type ExportAnalysis } from '../src/main/pipeline/exportCheck'
+import { clipTimeline } from '@shared/clipTimeline'
+import { makeTranscript } from './helpers'
 import type { RenderJob } from '../src/main/pipeline/render'
 
 // Real ffmpeg 7 output (trimmed): 1 s of black and silence, a frozen
@@ -99,8 +101,8 @@ describe('cuts inside words', () => {
       { text: 'first', start: 1, end: 1.5 }, { text: 'second', start: 2, end: 2.6 }, { text: 'third', start: 5, end: 5.5 }
     ] }]
   }
-  const clip = (cuts: Array<{ start: number; end: number }>): Pick<Clip, 'edit'> =>
-    ({ edit: { start: 0, end: 8, tightenCuts: false, cuts } as unknown as Clip['edit'] })
+  const clip = (cuts: Array<{ start: number; end: number }>): Pick<Clip, 'edit' | 'hook'> =>
+    ({ hook: '', edit: { start: 0, end: 8, tightenCuts: false, cuts } as unknown as Clip['edit'] })
 
   it('reports a cut inside a word, in exported time', () => {
     const found = midWordCuts(clip([{ start: 2.3, end: 4 }]), transcript)
@@ -110,6 +112,48 @@ describe('cuts inside words', () => {
   it('accepts cuts between words, and inside a word voice activity calls silent', () => {
     expect(midWordCuts(clip([{ start: 3, end: 4 }]), transcript)).toBeNull()
     expect(midWordCuts(clip([{ start: 2.3, end: 4 }]), { ...transcript, speech: [{ start: 0.9, end: 2.2 }, { start: 4.9, end: 5.6 }] })).toBeNull()
+  })
+})
+
+describe('a clip with a cold open', () => {
+  const transcript = makeTranscript([
+    'Most people start a channel and quit within a month.',
+    'They post twice and nobody watches.',
+    'Here is what changed for me.',
+    'Consistency beats talent every time.'
+  ], { wordSec: 0.3, gapSec: 0.08, sentenceGapSec: 0.5 })
+  const end = transcript.durationSec + 2
+  const coldClip = (): Clip => ({
+    id: 'c', title: '', hook: 'Consistency beats talent', summary: '', broll: [], focusTrack: null, suggestedStart: 0, suggestedEnd: end,
+    viralityScore: 0, viralityReason: '', visualSummary: null, hashtags: [], thumbnailPath: null,
+    edit: { aspect: '9:16', framing: 'manual', reframeMode: 'crop', focusX: .5, captionStyleId: 'beast', showTitle: false,
+      start: 0, end, captionsEnabled: false, autoZoom: false, tightenCuts: true, coldOpen: true },
+    // A silent visual payoff after the last line.
+    visualStory: { protectedRanges: [{ start: end - 1.6, end: end - 0.2 }] } as Clip['visualStory']
+  })
+
+  it('places protected ranges after the cold open, so the tail trim keeps the payoff', () => {
+    const clip = coldClip()
+    const timeline = clipTimeline(clip, transcript)
+    expect(timeline.coldOpenDuration).toBeGreaterThan(1)
+    const protectedOutput = protectedOutputRanges({ clip, transcript })
+    // The export ends in 2 s of silence over the payoff.
+    const duration = timeline.outputDuration
+    const a = analysis({ silence: [{ start: duration - 2, end: duration }] })
+    expect(judgeExport(a, ctx({ duration, tightenCuts: true, protectedOutput })).plan.tail).toBe(0)
+    expect(protectedOutput).toHaveLength(1)
+    expect(protectedOutput[0].start).toBeCloseTo(timeline.outputDuration - 1.6, 3)
+  })
+
+  it('reports cuts inside words at their time after the cold open', () => {
+    const clip = coldClip()
+    const word = transcript.segments[1].words[2]
+    clip.edit.cuts = [{ start: (word.start + word.end) / 2, end: transcript.segments[2].start - 0.1 }]
+    const timeline = clipTimeline(clip, transcript)
+    expect(timeline.hasColdOpen).toBe(true)
+    const found = midWordCuts(clip, transcript)
+    expect(found?.at).toBeCloseTo(timeline.toOutput((word.start + word.end) / 2), 3)
+    expect(found!.at).toBeGreaterThan((word.start + word.end) / 2 + 1)
   })
 })
 

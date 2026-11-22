@@ -1,7 +1,8 @@
 import { rename, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import type { ExportCheckFinding, ExportCheckReport, TimeRange, Transcript, VideoInfo } from '@shared/types'
-import { clipKeptSegments, isFiller, TimeMap } from '@shared/tighten'
+import { clipKeptSegments, isFiller } from '@shared/tighten'
+import { clipTimeline, type TimelineClip } from '@shared/clipTimeline'
 import { formatCheckTime } from '@shared/exportCheck'
 import { FFMPEG_PATH, FFPROBE_PATH, probeVideo, runBinary, runBinaryFull } from './ffmpeg'
 import { mediaThreads } from './mediaJobs'
@@ -261,15 +262,16 @@ export function judgeExport(a: ExportAnalysis, ctx: CheckContext): {
  * Internal cuts that land inside a word: a word boundary from the
  * transcript strictly around the cut, unless voice activity says it is
  * silent there (word timings are approximate; voice activity is acoustic).
- * One finding for all of them, in exported-file time. Pure.
+ * One finding for all of them, in exported-file time (after any cold
+ * open). Pure.
  */
 export function midWordCuts(
-  clip: Parameters<typeof clipKeptSegments>[0], transcript: Transcript | null
+  clip: TimelineClip, transcript: Transcript | null
 ): ExportCheckFinding | null {
   if (!transcript) return null
   const kept = clipKeptSegments(clip, transcript)
   if (!kept || kept.length < 2) return null
-  const map = new TimeMap(kept)
+  const timeline = clipTimeline(clip, transcript)
   const words = transcript.segments.flatMap(s => s.words)
     .filter(w => w.end - w.start >= MID_WORD_MIN_SEC && !isFiller(w.sourceText ?? w.text))
   const speech = transcript.speech
@@ -280,7 +282,7 @@ export function midWordCuts(
     if (speech?.length && !speech.some(r => r.start < edge && edge < r.end)) continue
     const word = words.find(w => w.start + MID_WORD_MARGIN_SEC < edge && edge < w.end - MID_WORD_MARGIN_SEC)
     if (!word) continue
-    const at = map.toOutput(edge)
+    const at = timeline.toOutput(edge)
     if (!hits.some(h => Math.abs(h.at - at) < 0.01)) hits.push({ at, word: (word.sourceText ?? word.text).trim() })
   }
   if (!hits.length) return null
@@ -292,11 +294,9 @@ export function midWordCuts(
 
 /** Source spans the exported range [start, end) was cut from. */
 function sourceSpans(job: RenderJob, range: TimeRange): TimeRange[] {
-  const kept = clipKeptSegments(job.clip, job.transcript)
-  if (!kept) return [{ start: job.clip.edit.start + range.start, end: job.clip.edit.start + range.end }]
-  const map = new TimeMap(kept)
-  return kept.flatMap(piece => {
-    const from = map.toOutput(piece.start)
+  // The cold open, when there is one, plays its own source span first.
+  return clipTimeline(job.clip, job.transcript).pieces.flatMap(piece => {
+    const from = piece.outStart
     const to = from + piece.end - piece.start
     const start = Math.max(from, range.start), end = Math.min(to, range.end)
     return end > start ? [{ start: piece.start + start - from, end: piece.start + end - from }] : []
@@ -527,12 +527,13 @@ function fixMessage(f: ExportCheckFinding, repair: { head: number; tail: number 
   }
 }
 
-/** Protected source stretches (visual payoffs, active pauses), in exported-file time. */
-function protectedOutputRanges(job: RenderJob): TimeRange[] {
+/**
+ * Protected source stretches (visual payoffs, active pauses), in exported-file
+ * time: wherever they play, the cold open included. Pure.
+ */
+export function protectedOutputRanges(job: Pick<RenderJob, 'clip' | 'transcript'>): TimeRange[] {
   const ranges = [...(job.clip.visualStory?.protectedRanges ?? []), ...(job.clip.gapActivity?.active ?? [])]
   if (!ranges.length) return []
-  const kept = clipKeptSegments(job.clip, job.transcript)
-  const map = kept ? new TimeMap(kept) : null
-  const toOutput = (t: number): number => map ? map.toOutput(t) : t - job.clip.edit.start
-  return ranges.map(r => ({ start: toOutput(r.start), end: toOutput(r.end) })).filter(r => r.end > r.start)
+  const timeline = clipTimeline(job.clip, job.transcript)
+  return ranges.flatMap(r => timeline.mapRange(r)).sort((a, b) => a.start - b.start)
 }
