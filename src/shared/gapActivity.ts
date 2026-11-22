@@ -1,6 +1,6 @@
 import type { Clip, TimeRange, Transcript } from './types'
 import { sourceStretches } from './clipSegments'
-import { computeKeptSegments, isFiller, normalizeRanges, subtractRanges, type TightenClip } from './tighten'
+import { computeKeptSegments, isFiller, normalizeRanges, retakeRanges, subtractRanges, type TightenClip } from './tighten'
 
 /**
  * "Gap activity": should a silent pause survive pause removal because
@@ -33,6 +33,8 @@ const FILLER_PAD_SEC = 0.15
  * re-measure sees every gap again. Leaves out:
  * - stretches that are cut only because a filler word was removed ("um"
  *   plus its padding): keeping them would bring the "um" back;
+ * - retakes (a restarted or repeated sentence): they are speech, so they
+ *   would always measure as loud, and keeping them would undo the removal;
  * - what the user cut, including the skipped middle of a joined clip.
  */
 export function measurableGaps(clip: Pick<Clip, 'edit' | 'visualStory'>, transcript: Transcript): TimeRange[] {
@@ -45,7 +47,8 @@ export function measurableGaps(clip: Pick<Clip, 'edit' | 'visualStory'>, transcr
     .filter(w => w.end > start && w.start < end && isFiller(w.sourceText ?? w.text))
     .map(w => ({ start: w.start - FILLER_PAD_SEC, end: w.end + FILLER_PAD_SEC })), start, end)
   const cuts = normalizeRanges(clip.edit.cuts, start, end)
-  return subtractRanges(subtractRanges(removed, fillers), cuts)
+  const retakes = retakeRanges(transcript, start, end)
+  return subtractRanges(subtractRanges(subtractRanges(removed, fillers), retakes), cuts)
     .filter(r => r.end - r.start >= MIN_MEASURED_GAP_SEC)
 }
 
