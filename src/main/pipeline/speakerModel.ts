@@ -22,8 +22,8 @@ import { modelsDir } from './detect'
  * on multi-speaker sources benefits, so it is downloaded on first use into
  * userData/models and verified by SHA-256 against the value pinned here. A
  * copy in resources/models (a packager's choice) is used as is. Offline,
- * or if the download fails, diarization is simply skipped and retried on a
- * later run.
+ * or if the download fails, diarization is simply skipped and the download
+ * retried after the app restarts.
  */
 
 export const SPEAKER_MODEL_FILE = 'campplus-voxceleb-en.onnx'
@@ -85,36 +85,55 @@ export async function downloadVerified(url: string, dest: string, sha256: string
 }
 
 let pending: Promise<string | null> | null = null
+/** A failed download is not retried on every run of the same session. */
+let downloadFailed = false
 
 /**
  * Path to a verified speaker model, downloading it once if needed; null when
  * it is unavailable (offline, download refused, no userData outside
- * Electron). Never throws except on cancellation. Concurrent callers share
- * one download.
+ * Electron). Never throws except when `signal` aborts.
+ *
+ * Concurrent callers share one download, which belongs to none of them: it
+ * runs under its own timeout, and `signal` only abandons this caller's wait.
+ * A download that outlives the run that started it finishes in the
+ * background and serves the next one. After a failed download the model is
+ * reported unavailable until the app restarts, so a persistent failure does
+ * not fetch 30 MB again on every run.
  */
 export function speakerModelPath(signal?: AbortSignal): Promise<string | null> {
   const override = process.env.CUTAWAN_SPEAKER_MODEL
   if (override) return Promise.resolve(existsSync(override) ? override : null)
-  pending ??= resolveModel(signal).finally(() => { pending = null })
-  return pending
+  if (signal?.aborted) return Promise.reject(signal.reason)
+  pending ??= resolveModel().finally(() => { pending = null })
+  return signal ? abandonable(pending, signal) : pending
 }
 
-async function resolveModel(signal?: AbortSignal): Promise<string | null> {
+/** `work`, or a rejection as soon as `signal` aborts; `work` itself carries on. */
+function abandonable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
+}
+
+async function resolveModel(): Promise<string | null> {
   const bundled = join(modelsDir(), SPEAKER_MODEL_FILE)
   if (existsSync(bundled)) return bundled
   const dir = cacheDir()
   if (!dir) return null
   const cached = join(dir, SPEAKER_MODEL_FILE)
   if (await isValid(cached)) return cached
+  if (downloadFailed) return null
   try {
     await mkdir(dir, { recursive: true })
     await rm(cached, { force: true })
-    await downloadVerified(SPEAKER_MODEL_URL, cached, SPEAKER_MODEL_SHA256, SPEAKER_MODEL_BYTES, signal)
+    await downloadVerified(SPEAKER_MODEL_URL, cached, SPEAKER_MODEL_SHA256, SPEAKER_MODEL_BYTES)
     verified.add(cached)
     return cached
   } catch (error) {
-    if (signal?.aborted) throw error
-    console.warn('Speaker model unavailable; diarization skipped this run:', error instanceof Error ? error.message : error)
+    downloadFailed = true
+    console.warn('Speaker model unavailable; diarization skipped until the app restarts:', error instanceof Error ? error.message : error)
     return null
   }
 }
