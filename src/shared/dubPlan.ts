@@ -117,19 +117,21 @@ export function planDubCues(
   clip: Pick<Clip, 'edit' | 'visualStory' | 'gapActivity' | 'translation' | 'dub'>,
   transcript: Transcript | null,
   segments: KeptSegment[] | null,
-  outputDuration?: number
+  outputDuration?: number,
+  /** Output seconds before the clip proper starts (a cold open); lines shift by it. */
+  outputOffset = 0
 ): DubCue[] {
   const { translation, dub } = clip
   if (!translation?.accepted || !dub?.enabled || !dub.lines.length) return []
   const map = new TimeMap(segments?.length ? segments : [{ start: clip.edit.start, end: clip.edit.end }])
-  const total = outputDuration ?? map.outputDuration
+  const total = outputDuration ?? outputOffset + map.outputDuration
   const lines = translationState(clip, translation, transcript).playable
   const cues: DubCue[] = []
   lines.forEach((line, i) => {
     const voiced = dubLineFor(dub, line)
     if (!voiced) return
-    const start = map.toOutput(line.start)
-    const slotEnd = Math.min(total, i + 1 < lines.length ? map.toOutput(lines[i + 1].start) : total)
+    const start = outputOffset + map.toOutput(line.start)
+    const slotEnd = Math.min(total, i + 1 < lines.length ? outputOffset + map.toOutput(lines[i + 1].start) : total)
     const available = slotEnd - start - DUB_LINE_GAP_SEC
     if (available <= 0.05) return
     const tempo = Math.min(DUB_MAX_TEMPO, Math.max(1, voiced.tempo || 1))

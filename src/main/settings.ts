@@ -42,6 +42,8 @@ interface StoredSettings {
   branding: BrandingSettings
   brandVoice: BrandVoiceSettings
   importCookiesBrowser: BrowserCookieSource
+  /** Folder background music is picked from; null = none chosen. */
+  musicFolder: string | null
 }
 
 const DEFAULT_BRANDING: BrandingSettings = {
@@ -81,7 +83,8 @@ const DEFAULTS: StoredSettings = {
   sizeTargetMb: null,
   branding: DEFAULT_BRANDING,
   brandVoice: DEFAULT_BRAND_VOICE,
-  importCookiesBrowser: ''
+  importCookiesBrowser: '',
+  musicFolder: null
 }
 
 function settingsPath(): string {
@@ -234,7 +237,8 @@ export async function getSettings(): Promise<AppSettings> {
     brandVoice: s.brandVoice,
     appVersion: app.getVersion(),
     importCookiesBrowser: s.importCookiesBrowser,
-    hasImportCookiesFile: getImportCookiesPath() !== null
+    hasImportCookiesFile: getImportCookiesPath() !== null,
+    musicFolder: s.musicFolder
   }
 }
 
@@ -247,6 +251,11 @@ export function getImportPreferences(): {
     importCookiesBrowser: load().importCookiesBrowser,
     importCookiesPath: getImportCookiesPath()
   }
+}
+
+/** The background music folder, or null when none is set. */
+export function getMusicFolder(): string | null {
+  return load().musicFolder ?? null
 }
 
 /** Synchronous access to the stored branding preferences. */
@@ -331,6 +340,9 @@ export async function updateSettings(update: SettingsUpdate): Promise<AppSetting
     s.brandVoice = { ...s.brandVoice, ...update.brandVoice }
   }
   if (update.importCookiesBrowser !== undefined) s.importCookiesBrowser = update.importCookiesBrowser
+  if (update.musicFolder !== undefined) {
+    s.musicFolder = typeof update.musicFolder === 'string' && update.musicFolder.trim() ? update.musicFolder.trim() : null
+  }
   if (update.clearImportCookiesFile) await clearImportCookiesFile()
   persist(s)
   return getSettings()

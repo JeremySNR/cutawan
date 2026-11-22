@@ -516,6 +516,8 @@ export interface TranslatedCaptionEvent {
 }
 
 export interface TranslatedCaptionOptions {
+  /** Output seconds before the clip proper starts (a cold open); events shift by it. */
+  outputOffset?: number
   style: CaptionStyle
   /** Output frame width / height. */
   aspectRatio: number
@@ -541,10 +543,11 @@ export function translatedCaptionEvents(
   opts: TranslatedCaptionOptions
 ): TranslatedCaptionEvent[] {
   const map = new TimeMap(segments?.length ? segments : [{ start: clipStart, end: clipEnd }])
-  const duration = map.outputDuration
+  const offset = opts.outputOffset ?? 0
+  const duration = offset + map.outputDuration
   const budget = translatedCardBudget(opts.style, opts.aspectRatio, opts.font, opts.scale)
   const rtl = isRightToLeft(opts.font.script)
-  const slots = lines.map((line) => ({ line, start: map.toOutput(line.start), end: map.toOutput(line.end) }))
+  const slots = lines.map((line) => ({ line, start: offset + map.toOutput(line.start), end: offset + map.toOutput(line.end) }))
   const events: TranslatedCaptionEvent[] = []
   slots.forEach((slot, index) => {
     const cards = splitTranslatedSentence(slot.line.text, budget, opts.style, opts.font.script, opts.languageCode)
@@ -605,7 +608,8 @@ export function translatedCaptionPlan(
   segments: KeptSegment[] | null,
   style: CaptionStyle,
   aspectRatio: number,
-  platform: CaptionPlatform
+  platform: CaptionPlatform,
+  outputOffset = 0
 ): TranslatedCaptionPlan | null {
   const mode = effectiveCaptionLanguage(clip)
   const translation = clip.translation
@@ -618,7 +622,8 @@ export function translatedCaptionPlan(
     aspectRatio,
     font,
     scale: layout.fontScale / style.fontScale,
-    languageCode: translation.languageCode
+    languageCode: translation.languageCode,
+    outputOffset
   })
   return { mode, font, layout, events }
 }

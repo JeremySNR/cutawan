@@ -334,9 +334,10 @@ export async function prepareDubTrack(
   segments: KeptSegment[] | null,
   outputDuration: number,
   tempDir: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  outputOffset = 0
 ): Promise<PreparedDub | null> {
-  const cues = planDubCues(clip, transcript, segments, outputDuration).filter((cue) => existsSync(cue.audioPath))
+  const cues = planDubCues(clip, transcript, segments, outputDuration, outputOffset).filter((cue) => existsSync(cue.audioPath))
   if (!cues.length) return null
   const trackPath = join(tempDir, `dub-${randomUUID()}.wav`)
   await renderDubTrack(cues, outputDuration, trackPath, signal)

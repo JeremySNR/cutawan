@@ -14,11 +14,25 @@ import type {
   WatermarkPosition
 } from '@shared/types'
 import type { EncoderPreference, ExportCheckReport } from '@shared/types'
-import { clipKeptSegments, editedClipDuration, remapTranscript, TimeMap, type KeptSegment } from '@shared/tighten'
+import type { KeptSegment } from '@shared/tighten'
+import { ClipTimeline, clipTimeline, clipTimelineParts, mapTimedToOutput, timelineFocusTrack, timelineTranscript } from '@shared/clipTimeline'
+import { clipCaptionPositionRanges } from '@shared/captionPlacement'
+import {
+  MUSIC_BED_LU,
+  MUSIC_FADE_IN_SEC,
+  MUSIC_FADE_OUT_SEC,
+  SFX_EXPRESSIONS,
+  SFX_SPECS,
+  WHOOSH_BAND,
+  WHOOSH_ENVELOPE_EXPR,
+  dbToGain,
+  type SfxCue
+} from '@shared/audioMix'
+import { clipCaptionOptions, clipSoundEffects } from '@shared/clipOverlays'
 import { SEPARATE_STRETCH_GAP_SEC, limitStretches, sourceStretches } from '@shared/clipSegments'
 import type { TimeRange } from '@shared/types'
 import { focusPanDuration, focusSnaps } from '@shared/focusTrack'
-import { automaticLayoutShots, clipAllowsAutoZoom, compositionHidesTitle, detailCaptionRanges, layoutBlocksAutoZoom } from '@shared/contentType'
+import { automaticLayoutShots, clipAllowsAutoZoom, compositionHidesTitle, layoutBlocksAutoZoom } from '@shared/contentType'
 import { compositionGraph, fitRegionGraph } from './layoutFilters'
 import { resolveCaptionStyle } from '@shared/captionStyles'
 import { computeZoomEvents, fitZoomEvents, remapZoomEvents, type ZoomEvent } from '@shared/zoom'
@@ -380,7 +394,8 @@ const CUT_FADE_MAX_SHARE = 0.25
  * `duration` seconds once trimmed: a fade in where it follows a cut and a
  * fade out where one follows it. Never at the clip's own start or end (the
  * end has its own fade, see audioChain), and never between pieces that touch
- * in the source. Exported for tests.
+ * in the source. A cold open's seam is a cut too, although the clip's start
+ * lies before the replayed line in the source. Exported for tests.
  */
 export function cutFades(segments: KeptSegment[], i: number, duration: number): string {
   const fade = Math.min(CUT_FADE_SEC, duration * CUT_FADE_MAX_SHARE)
@@ -388,8 +403,8 @@ export function cutFades(segments: KeptSegment[], i: number, duration: number): 
   const d = fade.toFixed(4)
   const filters: string[] = []
   const previous = segments[i - 1], next = segments[i + 1]
-  if (previous && segments[i].start - previous.end > 0.001) filters.push(`afade=t=in:d=${d}:curve=hsin`)
-  if (next && next.start - segments[i].end > 0.001) {
+  if (previous && Math.abs(segments[i].start - previous.end) > 0.001) filters.push(`afade=t=in:d=${d}:curve=hsin`)
+  if (next && Math.abs(next.start - segments[i].end) > 0.001) {
     filters.push(`afade=t=out:st=${Math.max(0, duration - fade).toFixed(4)}:d=${d}:curve=hsin`)
   }
   return filters.map((f) => `,${f}`).join('')
@@ -404,8 +419,19 @@ export function cutFades(segments: KeptSegment[], i: number, duration: number): 
  * A clip joined from distant moments is opened once per moment (`sources`,
  * one input each, in order), so the minutes between them are never decoded;
  * each segment is then cut from the input that holds it.
+ *
+ * A cold open replays a line from later in the clip first. Cutting it from
+ * the same input would make ffmpeg hold every frame between the clip's start
+ * and that line in memory until the concat reached them, so the line has an
+ * input of its own (`coldOpen`), and is the first segment.
  */
-function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: boolean, sources?: TimeRange[]): string {
+function tightenGraph(
+  segments: KeptSegment[],
+  clipStart: number,
+  hasAudio: boolean,
+  sources?: TimeRange[],
+  coldOpen?: { input: number; origin: number }
+): string {
   const parts: string[] = []
   const vLabels: string[] = []
   const aLabels: string[] = []
@@ -414,8 +440,9 @@ function tightenGraph(segments: KeptSegment[], clipStart: number, hasAudio: bool
     // frame outside its stretch, and an edge lookup would then pick the wrong
     // input and cut the wrong footage.
     const middle = (seg.start + seg.end) / 2
-    const input = sources ? Math.max(0, sources.findIndex((r) => middle >= r.start && middle <= r.end)) : 0
-    const origin = sources ? sources[input].start : clipStart
+    const own = i === 0 ? coldOpen : undefined
+    const input = own ? own.input : sources ? Math.max(0, sources.findIndex((r) => middle >= r.start && middle <= r.end)) : 0
+    const origin = own ? own.origin : sources ? sources[input].start : clipStart
     const s = Math.max(0, seg.start - origin).toFixed(3)
     const e = Math.max(0, seg.end - origin).toFixed(3)
     parts.push(`[${input}:v]trim=start=${s}:end=${e},setpts=PTS-STARTPTS[vs${i}]`)
@@ -510,6 +537,71 @@ function watermarkOverlayXY(position: WatermarkPosition, margin: number): string
   }
 }
 
+/** Sound effects and background music mixed under the speech (see shared/audioMix.ts). */
+export interface AudioMixPlan {
+  /** Synthesised effects, output seconds. */
+  sfx: SfxCue[]
+  /** Background music file, looped to the clip's length; null for none. */
+  musicPath: string | null
+  /** Music level in dB before ducking. */
+  musicGainDb: number
+  /** Loudness of the speech before normalisation (LUFS): sets the effect levels and the duck threshold. */
+  speechLufs: number
+}
+
+/** Speech loudness assumed when the source was not measured. */
+export const DEFAULT_SPEECH_LUFS = -20
+/** Short-term loudness of the synthesised effects at full scale, roughly. */
+const SFX_REFERENCE_LUFS = -10
+const MIX_FORMAT = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo'
+
+/** ffmpeg source filters synthesising one effect (from the shared recipes). Exported for tests. */
+export function sfxSource(kind: SfxCue['kind']): string {
+  const spec = SFX_SPECS[kind]
+  if (kind === 'whoosh') {
+    return `anoisesrc=d=${spec.duration}:c=pink:r=48000:a=0.8:s=7,highpass=f=${WHOOSH_BAND.highpassHz},` +
+      `lowpass=f=${WHOOSH_BAND.lowpassHz},aeval='val(0)*(${WHOOSH_ENVELOPE_EXPR})':c=same`
+  }
+  return `aevalsrc='${SFX_EXPRESSIONS[kind]}':s=48000:d=${spec.duration}`
+}
+
+/**
+ * Music bed and effects mixed under the speech, ahead of the master chain so
+ * the loudness normalisation covers the finished mix. The music loops to the
+ * clip's length, fades in and out, and a sidechain compressor keyed on the
+ * speech ducks it whenever someone talks. `amix` ends with its first input
+ * (the speech), so the mix is exactly as long as the kept segments.
+ */
+function audioMixGraph(voice: string, mix: AudioMixPlan, musicInput: number | null, duration: number, master: string): string {
+  const parts = [`[${voice}]${MIX_FORMAT}[vfmt]`]
+  const inputs: string[] = []
+  if (musicInput !== null) {
+    parts.push('[vfmt]asplit=2[vmain][vkey]')
+    inputs.push('[vmain]')
+    const fadeIn = Math.min(MUSIC_FADE_IN_SEC, duration / 3)
+    const fadeOut = Math.min(MUSIC_FADE_OUT_SEC, duration / 3)
+    parts.push(
+      `[${musicInput}:a]atrim=end=${duration.toFixed(3)},asetpts=PTS-STARTPTS,${MIX_FORMAT},` +
+      `volume=${mix.musicGainDb.toFixed(2)}dB,afade=t=in:d=${fadeIn.toFixed(3)},` +
+      `afade=t=out:st=${Math.max(0, duration - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}[mbed]`
+    )
+    // Speech 12 dB over the threshold at ratio 6 takes the music down ~10 dB.
+    const threshold = Math.min(1, Math.max(0.001, dbToGain(mix.speechLufs - 12)))
+    parts.push(`[mbed][vkey]sidechaincompress=threshold=${threshold.toFixed(5)}:ratio=6:attack=20:release=400:makeup=1[mduck]`)
+    inputs.push('[mduck]')
+  } else {
+    inputs.push('[vfmt]')
+  }
+  mix.sfx.forEach((cue, i) => {
+    const db = Math.min(0, mix.speechLufs + SFX_SPECS[cue.kind].gainDb - SFX_REFERENCE_LUFS)
+    const delay = Math.round(cue.start * 1000)
+    parts.push(`${sfxSource(cue.kind)},${MIX_FORMAT},volume=${db.toFixed(2)}dB,adelay=delays=${delay}:all=1[sfx${i}]`)
+    inputs.push(`[sfx${i}]`)
+  })
+  parts.push(`${inputs.join('')}amix=inputs=${inputs.length}:duration=first:dropout_transition=0:normalize=0,${master}[aout]`)
+  return parts.join(';')
+}
+
 interface FilterGraph {
   filterComplex: string
   /** Extra `-i` input args for the B-roll images (after the main input). */
@@ -542,6 +634,11 @@ export function buildFilterGraph(
      * clip joins distant moments. Absent means one input from `clipStart`.
      */
     sources?: TimeRange[]
+    /**
+     * A line replayed before `segments` (the cold open). It plays first and
+     * is opened as an input of its own, after the source inputs.
+     */
+    coldOpen?: KeptSegment | null
   } | null,
   options?: {
     branding?: BrandingSettings | null
@@ -559,13 +656,16 @@ export function buildFilterGraph(
      */
     loudness?: LoudnessStats | null
     audioTailSec?: number
+    /** Effects and music to mix under the speech; absent or empty mixes nothing. */
+    audioMix?: AudioMixPlan | null
   }
 ): FilterGraph {
   const { w, h } = targetDims(clip.edit.aspect, source)
   const parts: string[] = []
   const extraInputs: string[] = []
-  /** Image inputs (B-roll, watermark) come after the source input or inputs. */
-  const sourceInputs = tighten?.sources?.length ?? 1
+  /** Image inputs (B-roll, watermark) come after the source input or inputs and any cold-open input. */
+  const coldOpen = tighten?.coldOpen ?? null
+  const sourceInputs = (tighten?.sources?.length ?? 1) + (coldOpen ? 1 : 0)
 
   const items = clip.broll.filter(
     (b) =>
@@ -589,19 +689,29 @@ export function buildFilterGraph(
   const focusCommandsPath = focus.commands ? options?.focusCommandsPath : undefined
 
   let audioLabel: string | null = null
+  let voice = '0:a'
   if (tighten) {
-    parts.push(tightenGraph(tighten.segments, tighten.clipStart, source.hasAudio, tighten.sources))
+    const segments = coldOpen ? [coldOpen, ...tighten.segments] : tighten.segments
+    const coldInput = coldOpen ? { input: sourceInputs - 1, origin: coldOpen.start } : undefined
+    parts.push(tightenGraph(segments, tighten.clipStart, source.hasAudio, tighten.sources, coldInput))
     parts.push(reframeGraph(clip, source, 'vcat', focus, focusCommandsPath))
-    if (source.hasAudio) {
-      parts.push(`[acat]${audioChain(clipDuration, options?.loudness ?? null, options?.audioTailSec)}[aout]`)
-      audioLabel = 'aout'
-    }
+    voice = 'acat'
   } else {
     parts.push(reframeGraph(clip, source, '0:v', focus, focusCommandsPath))
-    if (source.hasAudio) {
-      parts.push(`[0:a]${audioChain(clipDuration, options?.loudness ?? null, options?.audioTailSec)}[aout]`)
-      audioLabel = 'aout'
+  }
+  // The music file is the last input, after every image (B-roll, watermark).
+  const mix = options?.audioMix
+  const mixing = source.hasAudio && mix && (mix.sfx.length > 0 || mix.musicPath)
+  const watermarked = Boolean(options?.branding?.enabled && options.branding.imagePath)
+  const musicInput = mixing && mix.musicPath ? sourceInputs + items.length + (watermarked ? 1 : 0) : null
+  if (source.hasAudio) {
+    const master = audioChain(clipDuration, options?.loudness ?? null, options?.audioTailSec)
+    if (mixing) {
+      parts.push(audioMixGraph(voice, mix, musicInput, clipDuration, master))
+    } else {
+      parts.push(`[${voice}]${master}[aout]`)
     }
+    audioLabel = 'aout'
   }
 
   const zoomEvents = options?.zoomEvents
@@ -669,6 +779,8 @@ export function buildFilterGraph(
     parts.push(`[${current}]setsar=1[vout]`)
   }
 
+  if (musicInput !== null && mix?.musicPath) extraInputs.push('-stream_loop', '-1', '-i', mix.musicPath)
+
   return {
     filterComplex: parts.join(';'),
     extraInputs,
@@ -682,6 +794,11 @@ export interface RenderJob {
   source: VideoInfo
   transcript: Transcript | null
   outputPath: string
+  /**
+   * The music track for this clip (resolved from the music folder), or
+   * null/absent for none. Only used while the clip's music toggle is on.
+   */
+  musicPath?: string | null
   encoder?: EncoderPreference
   quality?: QualityPreference
   /** App-wide watermark/logo composited under the captions. */
@@ -708,6 +825,35 @@ export interface RenderResult {
   check?: ExportCheckReport
 }
 
+/**
+ * The effects and music for one export: effects by the shared rules at the
+ * cold-open seam, the title and any joins; music levelled from its measured
+ * loudness to sit MUSIC_BED_LU under the speech. Null when neither is on.
+ */
+async function planAudioMix(
+  clip: Clip,
+  timeline: ClipTimeline | null,
+  outputDuration: number,
+  titleAt: number | null,
+  loudness: LoudnessStats | null,
+  job: RenderJob
+): Promise<AudioMixPlan | null> {
+  const speechLufs = loudness && Number.isFinite(loudness.inputI) && loudness.inputI > -70 ? loudness.inputI : DEFAULT_SPEECH_LUFS
+  // Same cues as the preview (clipSoundEffects), on the same timeline.
+  const sfx = clipSoundEffects(clip, timeline ?? new ClipTimeline([{ start: clip.edit.start, end: clip.edit.start + outputDuration }]), titleAt)
+  const musicPath = clip.edit.music && job.musicPath && existsSync(job.musicPath) ? job.musicPath : null
+  if (!sfx.length && !musicPath) return null
+  let musicGainDb = 0
+  if (musicPath) {
+    // Read the track's own loudness (its first minute is plenty) so quiet and
+    // loud tracks both land at the same bed level under the speech.
+    const music = await measureLoudness(musicPath, 0, 60, job.signal).catch(() => null)
+    const musicLufs = music && Number.isFinite(music.inputI) && music.inputI > -70 ? music.inputI : -14
+    musicGainDb = Math.max(-40, Math.min(6, speechLufs + MUSIC_BED_LU - musicLufs))
+  }
+  return { sfx, musicPath, musicGainDb, speechLufs }
+}
+
 export function renderClip(job: RenderJob): Promise<RenderResult> {
   return mediaJobs.run(async () => {
     const temporary = `${job.outputPath}.partial-${randomUUID()}.mp4`
@@ -719,7 +865,7 @@ export function renderClip(job: RenderJob): Promise<RenderResult> {
         '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-'], { signal: job.signal,
         // Against what plays, not the trim span: a joined clip's trim includes
         // the minutes it skips, which left the bar stuck at 95%.
-        onProgress: seconds => job.onProgress?.(.95 + .05 * Math.min(1, seconds / Math.max(.1, editedClipDuration(job.clip, job.transcript)))) }))
+        onProgress: seconds => job.onProgress?.(.95 + .05 * Math.min(1, seconds / Math.max(.1, clipTimeline(job.clip, job.transcript).outputDuration))) }))
       // Black, freezes, dead air, level and mid-word cuts; repaired in place when safe. Never fatal.
       const check = await timed('export/check', () => checkExport(temporary, job, result))
       job.signal?.throwIfAborted()
@@ -742,15 +888,21 @@ async function render(job: RenderJob): Promise<RenderResult> {
   const duration = Math.max(0.5, clip.edit.end - clip.edit.start)
   const { w, h } = targetDims(clip.edit.aspect, source)
 
-  // Tighten cuts: figure out the kept segments and remap everything that is
-  // timed against the source (captions, B-roll, face track) into the
-  // compacted output timeline.
-  const segments = alignSegmentsToFrames(clipKeptSegments(clip, transcript), source.fps, start, clip.edit.end)
-  if (segments && segments.length === 0) {
+  // What plays, in order (shared with the preview): an optional cold open,
+  // then the kept segments. Everything timed against the source (captions,
+  // B-roll, face track, layout) is remapped onto that output timeline.
+  const parts = clipTimelineParts(clip, transcript)
+  const kept = alignSegmentsToFrames(parts.tightened ? parts.main : null, source.fps, start, clip.edit.end)
+  if (kept && kept.length === 0) {
     throw new Error('Nothing is left to export: every part of this clip has been cut. Undo a cut or widen the trim.')
   }
-  const map = segments ? new TimeMap(segments) : null
-  const outputDuration = map ? map.outputDuration : duration
+  const coldOpen = parts.coldOpen
+    ? alignSegmentsToFrames([parts.coldOpen], source.fps, start, clip.edit.end)?.[0] ?? null
+    : null
+  // A cold open needs the trim+concat graph even when nothing else is cut.
+  const segments = kept ?? (coldOpen ? alignSegmentsToFrames([{ start, end: clip.edit.end }], source.fps, start, clip.edit.end) : null)
+  const timeline = segments ? new ClipTimeline(segments, coldOpen) : null
+  const outputDuration = timeline ? timeline.outputDuration : duration
   // Moments far apart are each opened with their own seek. One input reading
   // from the first to the last would decode everything between them too.
   const stretches = segments ? limitStretches(sourceStretches(clip.edit), MAX_SOURCE_INPUTS) : []
@@ -765,57 +917,75 @@ async function render(job: RenderJob): Promise<RenderResult> {
   let captionTranscript = transcript
   let captionStart = start
   let captionEnd = clip.edit.end
-  if (map && segments) {
+  if (timeline) {
+    const shots = automaticLayoutShots(clip).map((shot) => ({ ...shot,
+      start: Math.max(start, shot.start), end: Math.min(clip.edit.end, shot.end) })).filter((shot) => shot.end > shot.start)
     effectiveClip = {
       ...clip,
       edit: { ...clip.edit, start: 0, end: outputDuration },
       visualLayout: clip.visualLayout ? {
         ...clip.visualLayout, start: 0, end: outputDuration,
-        shots: automaticLayoutShots(clip).map((shot) => ({ ...shot,
-          start: map.toOutput(Math.max(start, shot.start)),
-          end: map.toOutput(Math.min(clip.edit.end, shot.end))
-        })).filter((shot) => shot.end > shot.start)
+        // Each shot plays wherever its footage does: a cold open repeats it.
+        shots: timeline.hasColdOpen
+          ? mapTimedToOutput(shots, timeline)
+          : shots.map((shot) => ({ ...shot, start: timeline.toOutput(shot.start), end: timeline.toOutput(shot.end) }))
+            .filter((shot) => shot.end > shot.start)
       } : undefined,
+      // B-roll illustrates the clip proper; the cold open plays clean.
       broll: clip.broll
-        .map((b) => ({ ...b, start: map.toOutput(b.start), end: map.toOutput(b.end) }))
+        .map((b) => ({ ...b, start: timeline.toOutput(b.start), end: timeline.toOutput(b.end) }))
         .filter((b) => b.end - b.start > 0.6),
       focusTrack: clip.focusTrack
-        ? clip.focusTrack.map((kf) => ({ ...kf, t: map.toOutput(kf.t) }))
+        ? timeline.hasColdOpen
+          ? timelineFocusTrack(clip.focusTrack, timeline)
+          : clip.focusTrack.map((kf) => ({ ...kf, t: timeline.toOutput(kf.t) }))
         : null
     }
     if (transcript) {
-      captionTranscript = remapTranscript(transcript, map, start, clip.edit.end)
+      captionTranscript = timelineTranscript(transcript, timeline, start, clip.edit.end)
       captionStart = 0
       captionEnd = outputDuration
     }
   }
 
+  const captionStyle = resolveCaptionStyle(
+    clip.edit.captionStyleId,
+    job.branding?.colors,
+    clip.edit.captionFontFamily ?? undefined
+  )
+  const titleText = clip.edit.showTitle && !compositionHidesTitle(effectiveClip) ? (clip.hook || clip.title).trim() : ''
+  // The title appears once the cold open has played.
+  const titleStart = timeline?.coldOpenDuration ?? 0
+  const captions = clip.edit.captionsEnabled && captionTranscript !== null
   let assPath: string | null = null
-  if (clip.edit.captionsEnabled && captionTranscript) {
+  if (captions || titleText) {
     // libass sizes text against the font's win ascent+descent, not the em
     // square the preview uses, so the ASS needs the resolved font's metrics
     // to come out the same size on screen (see assFontSize).
-    const captionStyle = resolveCaptionStyle(
-      clip.edit.captionStyleId,
-      job.branding?.colors,
-      clip.edit.captionFontFamily ?? undefined
-    )
     const fontMetrics = await fontMetricsForFamily(
       job.fontsDirPath ?? fontsDir(),
       captionStyle.fontFamily
     )
-    const ass = buildAss(captionTranscript, {
+    // Caption moves (detail views, faces, burned-in text) are planned in
+    // source time, shared with the preview, then follow the footage.
+    const sourceRanges = clipCaptionPositionRanges(clip, captionStyle.positionY, captionStyle.fontScale, source.width, source.height)
+    const positionRanges = timeline ? mapTimedToOutput(sourceRanges, timeline) : sourceRanges
+    const ass = buildAss(captions && captionTranscript ? captionTranscript : { language: '', durationSec: 0, segments: [] }, {
       fontMetrics,
       styleId: clip.edit.captionStyleId,
       width: w,
       height: h,
       clipStart: captionStart,
       clipEnd: captionEnd,
-      title: clip.edit.showTitle && !compositionHidesTitle(effectiveClip) ? clip.hook || clip.title : undefined,
+      title: titleText || undefined,
+      titleStyle: clip.edit.titleStyle,
+      titleStart,
       fontFamily: clip.edit.captionFontFamily ?? undefined,
       brandColors: job.branding?.colors,
-      positionRanges: detailCaptionRanges(effectiveClip),
-      translation: translatedCaptionPlan(clip, transcript, segments, captionStyle, w / h, process.platform)
+      positionRanges,
+      translation: translatedCaptionPlan(clip, transcript, segments, captionStyle, w / h, process.platform, timeline?.coldOpenDuration ?? 0),
+      // Seams and emphasis exactly as the preview lays them out.
+      ...clipCaptionOptions(clip, timeline ?? new ClipTimeline([{ start, end: clip.edit.end }]), captionStart)
     })
     const dir = join(tmpdir(), 'cutawan')
     await mkdir(dir, { recursive: true })
@@ -824,11 +994,12 @@ async function render(job: RenderJob): Promise<RenderResult> {
   }
 
   // Auto zoom: plan in source time (shared with the preview), then remap to
-  // the clip-relative output timeline the filters run on.
+  // the clip-relative output timeline the filters run on. The cold open
+  // plays unzoomed.
   let zoomEvents: ZoomEvent[] | null = null
   if (clipAllowsAutoZoom(clip.edit) && !layoutBlocksAutoZoom(clip)) {
-    const planned = computeZoomEvents(transcript, start, clip.edit.end, segments)
-    zoomEvents = remapZoomEvents(planned, (t) => (map ? map.toOutput(t) : t - start))
+    const planned = computeZoomEvents(transcript, start, clip.edit.end, kept)
+    zoomEvents = remapZoomEvents(planned, (t) => (timeline ? timeline.toOutput(t) : t - start))
     if (zoomEvents.length === 0) zoomEvents = null
   }
 
@@ -845,29 +1016,36 @@ async function render(job: RenderJob): Promise<RenderResult> {
     console.error(`[render] loudness normalisation: ${normalisationMode(loudness)}`, loudness)
   }
 
+  // Sound effects by rule and the music bed, mixed under the speech.
+  const audioMix = source.hasAudio
+    ? await planAudioMix(clip, timeline, outputDuration, titleText ? titleStart : null, loudness, job)
+    : null
+
   const tempDir = join(tmpdir(), 'cutawan')
   await mkdir(tempDir, { recursive: true })
   // Named up front because the graph has to reference the file; it is only
   // written if the graph comes back needing crop commands.
   const focusCommandsPath = join(tempDir, `focus-${randomUUID()}.cmd`)
   // AI voice dub (dub.ts): one pre-mixed track, mixed over the ducked voice.
-  const dub = await prepareDubTrack(clip, transcript, segments, outputDuration, tempDir, job.signal)
+  const dub = await prepareDubTrack(clip, transcript, segments, outputDuration, tempDir, job.signal, timeline?.coldOpenDuration ?? 0)
   const baseGraph = buildFilterGraph(
     effectiveClip,
     source,
     assPath,
     outputDuration,
-    segments ? { segments, clipStart: start, ...(sources ? { sources } : {}) } : null,
+    segments ? { segments, clipStart: start, ...(sources ? { sources } : {}), coldOpen } : null,
     {
       branding: job.branding,
       fontsDirPath: job.fontsDirPath,
       zoomEvents,
       focusCommandsPath,
       loudness,
-      audioTailSec: speechSafeFade(captionTranscript, captionStart, captionEnd)
+      audioTailSec: speechSafeFade(captionTranscript, captionStart, captionEnd),
+      audioMix
     }
   )
-  const graph = withDubMix(baseGraph, dub, sources?.length ?? 1)
+  // The cold open is opened as one more source input, before the graph's own.
+  const graph = withDubMix(baseGraph, dub, (sources?.length ?? 1) + (coldOpen ? 1 : 0))
   if (graph.focusCommands) await writeFile(focusCommandsPath, graph.focusCommands, 'utf8')
 
   // Whole-video renders can produce a filter graph far larger than a
@@ -927,7 +1105,7 @@ async function render(job: RenderJob): Promise<RenderResult> {
     audioCodec: string[]
     output: string[]
   }): string[] => [
-    ...(sources ?? [{ start, end: start + duration }]).flatMap((range) => [
+    ...[...(sources ?? [{ start, end: start + duration }]), ...(coldOpen ? [coldOpen] : [])].flatMap((range) => [
       '-ss', range.start.toFixed(3),
       '-t', (range.end - range.start).toFixed(3),
       '-i', source.path

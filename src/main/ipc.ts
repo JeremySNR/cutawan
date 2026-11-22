@@ -41,6 +41,7 @@ import { translateClip, type TranslateOptions } from './pipeline/translate'
 import { dubClip, estimateDub, type DubVoiceChoice } from './pipeline/dub'
 import { DUB_VOICES, dubSupport } from '@shared/dubPlan'
 import { addCustomFonts, listCustomFonts, removeCustomFont, renderFontsDir } from './fonts'
+import { clipMusicPath, listMusicTracks } from './music'
 import { clearImportCookiesFile, installImportCookiesFile } from './cookies'
 import { checkForUpdates, downloadUpdate, installUpdate, updateFromSource, getUpdateDownloadState, onUpdateDownloadState, openUpdateInstaller, cancelUpdateDownload } from './updates'
 import { UpdateActivity } from './updateActivity'
@@ -54,6 +55,7 @@ import {
   getBrandVoiceSettings,
   getExportPreferences,
   getModelPreferences,
+  getMusicFolder,
   getSettings,
   missingCredentialName,
   updateSettings
@@ -369,6 +371,7 @@ export function registerIpcHandlers(): void {
           imagePath: branding.imagePath && existsSync(branding.imagePath) ? branding.imagePath : null
         },
         fontsDirPath: await renderFontsDir(),
+        musicPath: await clipMusicPath(clip, getMusicFolder()),
         signal: controller.signal,
         onProgress: (fraction) => {
           if (!event.sender.isDestroyed()) {
@@ -577,6 +580,25 @@ export function registerIpcHandlers(): void {
     if (result.canceled || result.filePaths.length === 0) return getSettings()
     await installImportCookiesFile(result.filePaths[0])
     return getSettings()
+  })
+
+  handle('music:list', async () => listMusicTracks(getMusicFolder()))
+
+  handle('music:chooseFolder', async (event) => {
+    // Headless/CI hook: skip the native dialog.
+    let picked: string | null
+    if (process.env.CUTAWAN_MUSIC_FOLDER) {
+      picked = process.env.CUTAWAN_MUSIC_FOLDER
+    } else {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const result = await dialog.showOpenDialog(win!, {
+        title: 'Choose a folder of background music',
+        properties: ['openDirectory']
+      })
+      picked = result.canceled ? null : result.filePaths[0]
+    }
+    if (!picked) return getSettings()
+    return updateSettings({ musicFolder: picked })
   })
 
   handle('cookies:clear', async () => {

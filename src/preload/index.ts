@@ -123,6 +123,9 @@ const api = {
   importCookiesFile: (): Promise<AppSettings> => ipcRenderer.invoke('cookies:import'),
   clearCookiesFile: (): Promise<AppSettings> => ipcRenderer.invoke('cookies:clear'),
   selectBrandingLogo: (): Promise<AppSettings> => ipcRenderer.invoke('branding:selectLogo'),
+  /** Audio files in the music folder chosen in Settings (empty when none). */
+  listMusicTracks: (): Promise<Array<{ name: string; path: string }>> => ipcRenderer.invoke('music:list'),
+  chooseMusicFolder: (): Promise<AppSettings> => ipcRenderer.invoke('music:chooseFolder'),
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
   downloadUpdate: (): Promise<UpdateDownloadState> => ipcRenderer.invoke('updates:download'),
   getUpdateDownloadState: (): Promise<UpdateDownloadState> => ipcRenderer.invoke('updates:state'),

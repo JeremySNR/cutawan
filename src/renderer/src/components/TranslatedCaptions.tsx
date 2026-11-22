@@ -26,6 +26,7 @@ export function TranslatedCaptionOverlay({
   clip,
   segments,
   outputTime,
+  outputOffset = 0,
   sourceTime,
   aspectRatio
 }: {
@@ -33,6 +34,8 @@ export function TranslatedCaptionOverlay({
   clip: Clip
   /** Kept segments the preview plays (null: the whole trim). */
   segments: KeptSegment[] | null
+  /** Output seconds before the clip proper starts (a cold open). */
+  outputOffset?: number
   /** Playhead on the output timeline (after cuts and pause removal). */
   outputTime: number
   /** Playhead in source seconds, for layout bands. */
@@ -46,9 +49,9 @@ export function TranslatedCaptionOverlay({
   )
   const plan = useMemo(
     () => clip.edit.captionsEnabled
-      ? translatedCaptionPlan(clip, project.transcript, segments, style, aspectRatio, window.cutawan.osPlatform)
+      ? translatedCaptionPlan(clip, project.transcript, segments, style, aspectRatio, window.cutawan.osPlatform, outputOffset)
       : null,
-    [clip, project.transcript, segments, style, aspectRatio]
+    [clip, project.transcript, segments, style, aspectRatio, outputOffset]
   )
   if (!plan) return null
   const event = plan.events.find((e) => outputTime >= e.start && outputTime < e.end)
@@ -99,9 +102,10 @@ export function useDubPlayback(
   clip: Clip,
   segments: KeptSegment[] | null,
   outputTime: number,
-  playing: boolean
+  playing: boolean,
+  outputOffset = 0
 ): void {
-  const cues = useMemo(() => planDubCues(clip, project.transcript, segments), [clip, project.transcript, segments])
+  const cues = useMemo(() => planDubCues(clip, project.transcript, segments, undefined, outputOffset), [clip, project.transcript, segments, outputOffset])
   const windows = useMemo(() => duckWindows(cues), [cues])
   const players = useRef<HTMLAudioElement[]>([])
 
