@@ -8,7 +8,7 @@ import { initialWindowSize, MIN_WINDOW } from './windowSize'
 import { resolveUserDataPath } from './userData'
 import { stopInference } from './inference/client'
 import { validatePackage } from './packageValidation'
-import { openCaptionFrameWindow, registerCaptionFrameRenderer } from './captionFrames'
+import { appWindows, openCaptionFrameWindow, registerCaptionFrameRenderer } from './captionFrames'
 
 app.setName('Cutawan')
 app.setPath('userData', resolveUserDataPath(app.getPath('appData'), process.env.CUTAWAN_USER_DATA))
@@ -365,7 +365,16 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (appWindows().length === 0) createWindow()
+  })
+})
+
+// A hidden caption window open for an export would otherwise keep the app
+// running, invisible, after its last real window closes.
+app.on('browser-window-created', (_e, win) => {
+  win.on('closed', () => {
+    if (process.env.CUTAWAN_CAPTION_CHECK || process.platform === 'darwin') return
+    if (appWindows().length === 0 && BrowserWindow.getAllWindows().length > 0) app.quit()
   })
 })
 

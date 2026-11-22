@@ -1,6 +1,7 @@
 import type { Writable } from 'node:stream'
 import {
   captionFrameCount,
+  captionFrameRate,
   captionFrameTime,
   captionSceneAt,
   sceneKey,
@@ -87,7 +88,7 @@ export function captionFallbackNotice(styleName: string, fallbackName: string, r
 
 /** ffmpeg input arguments for the caption frames on stdin. */
 export function captionFrameInputArgs(width: number, height: number, fps: number): string[] {
-  return ['-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${width}x${height}`, '-framerate', fps.toFixed(6), '-i', 'pipe:0']
+  return ['-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${width}x${height}`, '-framerate', captionFrameRate(fps).arg, '-i', 'pipe:0']
 }
 
 /** One stretch of identical frames. */
@@ -218,6 +219,8 @@ export async function writeCaptionFrames(
     let pending = drawBatch(batch).catch((error: unknown) => {
       throw asRendererError(error)
     })
+    // Awaited in the loop; this only stops an early abort leaving it unhandled.
+    pending.catch(() => undefined)
     while (batch.length && !closed) {
       signal?.throwIfAborted()
       const rects = await pending

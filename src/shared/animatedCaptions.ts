@@ -335,6 +335,21 @@ export function sceneKey(scene: CaptionScene): string {
 }
 
 /** Output time of export frame `n` at `fps`: frame n shows the scene at n / fps. */
+/**
+ * The exact rate behind a probed frame rate. Probing rounds 30000/1001 to
+ * 29.97; fed to ffmpeg as 29.97, caption frame n lands a hair after video
+ * frame n, and overlay shows frame n-1 instead (243 of 257 frames a frame
+ * late in a measured run). The NTSC rates go to ffmpeg as their rationals.
+ */
+export function captionFrameRate(fps: number): { arg: string; value: number } {
+  for (const base of [24, 30, 48, 60, 120, 240]) {
+    const ntsc = (base * 1000) / 1001
+    if (Math.abs(fps - ntsc) < 0.006) return { arg: `${base * 1000}/1001`, value: ntsc }
+  }
+  if (Math.abs(fps - Math.round(fps)) < 1e-3) return { arg: String(Math.round(fps)), value: Math.round(fps) }
+  return { arg: fps.toFixed(6), value: Number(fps.toFixed(6)) }
+}
+
 export function captionFrameTime(n: number, fps: number): number {
   return n / fps
 }

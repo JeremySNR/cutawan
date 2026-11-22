@@ -107,12 +107,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
   })
 }
 
+/** Hidden export windows: never count as the app's own windows. */
+const captionWindows = new WeakSet<BrowserWindow>()
+
+/** The app's own windows, without hidden caption windows. */
+export function appWindows(): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter((w) => !captionWindows.has(w))
+}
+
 export async function openCaptionFrameWindow(spec: CaptionFrameSpec, signal?: AbortSignal): Promise<CaptionFrameSession> {
+  signal?.throwIfAborted()
   const families = planFontFamilies(spec.plan)
   const { fonts, missing } = await fontFiles(families, [spec.fontsDir, fontsDir()])
   if (missing.some((family) => families.includes(family))) {
     throw new CaptionRendererError(`the font ${missing.join(', ')} was not found`)
   }
+  signal?.throwIfAborted()
 
   const win = new BrowserWindow({
     show: false,
@@ -129,11 +139,18 @@ export async function openCaptionFrameWindow(spec: CaptionFrameSpec, signal?: Ab
       spellcheck: false
     }
   })
+  captionWindows.add(win)
   let closed = false
   let failure: Error | null = null
   const pending = new Map<number, { resolve: (frames: Array<CaptionFrameRect | null>) => void; reject: (error: Error) => void }>()
+  // Settles when the window fails or closes, so start-up waits end at once
+  // on a cancel or a crash instead of running out their timeouts.
+  let rejectFailed: (error: Error) => void = () => {}
+  const failed = new Promise<never>((_resolve, reject) => { rejectFailed = reject })
+  failed.catch(() => undefined)
   const fail = (error: Error): void => {
     failure ??= error
+    rejectFailed(failure)
     for (const entry of pending.values()) entry.reject(error)
     pending.clear()
   }
@@ -154,20 +171,23 @@ export async function openCaptionFrameWindow(spec: CaptionFrameSpec, signal?: Ab
   })
   const abort = (): void => close()
   signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
 
   try {
-    await withTimeout(pageUrl(win), OPEN_TIMEOUT_MS, 'opening the caption window')
+    await withTimeout(Promise.race([pageUrl(win), failed]), OPEN_TIMEOUT_MS, 'opening the caption window')
     const ready = new Promise<CaptionFramesReady>((resolve) => {
       win.webContents.ipc.once('caption-frames:ready', (_e, result: CaptionFramesReady) => resolve(result))
     })
     const init: CaptionFramesInit = { plan: spec.plan, width: spec.width, height: spec.height, fonts, required: families }
     win.webContents.send('caption-frames:init', init)
-    const result = await withTimeout(ready, OPEN_TIMEOUT_MS, 'loading the caption fonts')
+    const result = await withTimeout(Promise.race([ready, failed]), OPEN_TIMEOUT_MS, 'loading the caption fonts')
     if (!result.ok) throw new CaptionRendererError(result.error)
     signal?.throwIfAborted()
   } catch (error) {
     signal?.removeEventListener('abort', abort)
     close()
+    // A cancel reads as a cancel, not as a window failure to fall back from.
+    signal?.throwIfAborted()
     throw error
   }
 

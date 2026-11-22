@@ -35,7 +35,7 @@ import { focusPanDuration, focusSnaps } from '@shared/focusTrack'
 import { automaticLayoutShots, clipAllowsAutoZoom, compositionHidesTitle, layoutBlocksAutoZoom } from '@shared/contentType'
 import { compositionGraph, fitRegionGraph } from './layoutFilters'
 import { getCaptionStyle, libassCaptionStyleId, resolveCaptionStyle } from '@shared/captionStyles'
-import { animatedCaptionPlan, type AnimatedCaptionPlan } from '@shared/animatedCaptions'
+import { animatedCaptionPlan, captionFrameRate, type AnimatedCaptionPlan } from '@shared/animatedCaptions'
 import { planTitle } from '@shared/titleLayout'
 import {
   CaptionRendererError,
@@ -1032,7 +1032,8 @@ async function render(job: InternalRenderJob, cleanup: Array<() => void>): Promi
     }
   }
   // Caption frames follow the picture's frame rate: frame n shows time n / fps.
-  const captionFps = source.fps > 0 && Number.isFinite(source.fps) ? source.fps : 30
+  // Exact (NTSC rates as rationals), so caption frame n meets video frame n.
+  const captionFps = captionFrameRate(source.fps > 0 && Number.isFinite(source.fps) ? source.fps : 30).value
   const libassStyleId = animated ? chosenStyle.id : libassCaptionStyleId(clip.edit.captionStyleId)
   const captionStyle = libassStyleId === chosenStyle.id
     ? chosenStyle
@@ -1278,7 +1279,7 @@ async function render(job: InternalRenderJob, cleanup: Array<() => void>): Promi
     // Any failure with animated captions on is retried with libass by
     // renderWithCaptionFallback: the animated renderer must never be the
     // reason an export fails.
-    if (animated && !job.signal?.aborted) {
+    if (animated && !job.signal?.aborted && !notCaptionFailure(err, job.encoder)) {
       throw err instanceof CaptionRendererError ? err : new CaptionRendererError(err instanceof Error ? err.message : String(err), { cause: err })
     }
     throw err
@@ -1311,6 +1312,18 @@ function animatedFallbackNotice(styleId: string, error: unknown): string {
   const fallback = getCaptionStyle(libassCaptionStyleId(styleId))
   const reason = error instanceof Error ? error.message.split('\n')[0] : String(error)
   return captionFallbackNotice(style.name, fallback.name, reason)
+}
+
+/**
+ * Failures a libass re-render would hit just the same: a full disk, a file
+ * that cannot be written, or the GPU encoder the user insisted on. Re-rendering
+ * for those doubles the wait and then fails anyway.
+ */
+export function notCaptionFailure(error: unknown, encoder?: string): boolean {
+  if (error instanceof CaptionRendererError) return false
+  const text = error instanceof Error ? error.message : String(error)
+  if (/no space left on device|ENOSPC|permission denied|EACCES|EPERM|read-only file system/i.test(text)) return true
+  return encoder === 'gpu' && /nvenc|qsv|amf|videotoolbox|vaapi|cuda/i.test(text)
 }
 
 /**
