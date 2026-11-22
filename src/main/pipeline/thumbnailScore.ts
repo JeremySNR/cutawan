@@ -146,7 +146,7 @@ export function pickThumbnail(scored: ScoredCandidate[], minScore = 0.12): Score
 }
 
 /** How many candidates one ffmpeg call decodes. */
-export const THUMBNAIL_CANDIDATES = 8
+export const THUMBNAIL_CANDIDATES = 6
 /** Candidates closer than this are one moment. */
 const MIN_CANDIDATE_GAP_SEC = 0.75
 /** Keep away from range edges: cuts and fades live there. */
