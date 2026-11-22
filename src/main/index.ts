@@ -161,15 +161,19 @@ async function runSmokeCapture(win: BrowserWindow, dir: string): Promise<void> {
   if (await hasText('1 cut')) throw new Error('Smoke capture: undo did not restore the cut piece')
   if (await hasText('Review edits')) throw new Error('Smoke capture: undo did not restore the assessed selection')
   // Caption emphasis, title styles, cold open and sound: turn on the cold
-  // open, emoji and effects, show the sidebar's opening and sound controls,
-  // then put the clip back as it was.
+  // open, emoji and effects, check the opening and sound controls and shoot
+  // the preview, then put the clip back as it was.
   const toggles = ['cold-open-toggle', 'emoji-toggle', 'sfx-toggle']
   for (const id of toggles) await click(`[data-testid="${id}"]`)
-  await win.webContents.executeJavaScript(
-    `document.querySelector('[data-testid="title-styles"]')?.scrollIntoView({ block: 'start' })`
-  )
-  await sleep(600)
+  console.info('[smoke] opening controls:', await win.webContents.executeJavaScript(
+    `document.querySelector('[data-testid="title-styles"]')?.closest('section')?.innerText.replace(/\\s+/g, ' ')`))
+  await sleep(800)
   if (!(await hasText('Opens on'))) throw new Error('Smoke capture: the cold open did not find a line to replay')
+  // The preview now plays the cold open first (the sidebar is not repainted
+  // in offscreen captures, so its controls are checked by text instead).
+  for (const text of ['Emphasise keywords', 'Hook title at the start', 'Background music', 'Card', 'Banner']) {
+    if (!(await hasText(text))) throw new Error(`Smoke capture: missing editor control "${text}"`)
+  }
   await shot('editor-opening')
   for (const id of toggles) await click(`[data-testid="${id}"]`)
   // Out to the setup screen, which is where the two modes are chosen.
