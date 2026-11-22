@@ -123,18 +123,45 @@ describe('detectHighlights end to end (scripted model)', () => {
       { wordSec: 0.3, gapSec: 0.1, sentenceGapSec: 0.4 }
     )
     answers = {
-      // Lines 0-16 run about 47 s, over the 45 s cap: one repair is asked for,
-      // the same answer comes back, and the clip is trimmed as before.
-      viral_clips: () => ({ clips: [raw(0, 16, 80)] }),
+      // Lines 0-21 run about 60 s, past a short clip's 56 s ceiling: one
+      // repair is asked for, the same answer comes back, and the clip is
+      // trimmed back to the last sentence that fits.
+      viral_clips: () => ({ clips: [raw(0, 21, 80)] }),
       clip_endings: () => ({ endings: [{ index: 0, ends_with_payoff: false, better_end_line: 29, reason: 'later payoff' }] })
     }
     const clips = await detectHighlights('key', 'model', longTranscript,
       { ...options, clipLength: 'short' }, longTranscript.durationSec)
     expect(clips).toHaveLength(1)
-    expect(clips[0].edit.end - clips[0].edit.start).toBeLessThanOrEqual(45)
+    expect(clips[0].edit.end - clips[0].edit.start).toBeLessThanOrEqual(56)
     expect(analyzeClipBoundaries(longTranscript, clips[0].edit.start, clips[0].edit.end).endsMidSentence).toBe(false)
     expect(selections()).toHaveLength(2)
-    expect(selections()[1].user).toContain('1. Clip 1 ("A clip") runs about 47 seconds; the limit is 45 seconds.')
+    expect(selections()[1].user).toMatch(/1\. Clip 1 \("A clip"\) runs about 6\d seconds; the limit is 56 seconds\./)
+  })
+
+  it('keeps a clip that runs a little past its target whole, ranks it lower and says why', async () => {
+    const longTranscript = makeTranscript(
+      Array.from({ length: 40 }, (_, i) => `sentence ${i} word three four five.`),
+      { wordSec: 0.3, gapSec: 0.1, sentenceGapSec: 0.4 }
+    )
+    answers = {
+      // Lines 0-16 play about 47 s: past a short clip's 45 s target, inside its 56 s ceiling.
+      viral_clips: () => ({ clips: [raw(0, 16, 80), raw(20, 27, 70)] }),
+      clip_endings: () => ({ endings: [] })
+    }
+    const clips = await detectHighlights('key', 'model', longTranscript,
+      { ...options, clipLength: 'short' }, longTranscript.durationSec)
+    // No repair request: nothing broke a rule.
+    expect(selections()).toHaveLength(1)
+    const long = clips.find((c) => c.edit.start < 1)!
+    // Whole: it still ends on line 16, not trimmed back to fit 45 s.
+    expect(long.edit.end).toBeGreaterThan(longTranscript.segments[16].end)
+    expect(long.edit.end - long.edit.start).toBeGreaterThan(45)
+    // 80 before; 47 s is about 5% over, so it loses 2 points, from structure.
+    expect(long.viralityScore).toBe(78)
+    expect(long.viralityReason).toMatch(/Runs 4\d seconds, past the 45-second target for this length; kept whole rather than cut short\./)
+    const fits = clips.find((c) => c !== long)!
+    expect(fits.viralityScore).toBe(70)
+    expect(fits.viralityReason).not.toMatch(/Runs/)
   })
 
   it('falls back to snapping seconds from a provider that ignores line numbers', async () => {
@@ -768,7 +795,7 @@ describe('detectHighlights joining separate moments (scripted model)', () => {
     expect(finds).toHaveLength(2)
     expect(finds[1].user).toContain('Clip 1 ("fragment"): segment 2 runs about 3 seconds; every segment must be at least 3 seconds.')
     expect(finds[1].user).toContain('Clip 2 ("four parts") has 4 segments; a clip may join at most 3.')
-    expect(finds[1].user).toMatch(/Clip 3 \("too long"\) runs about \d+ seconds; the limit is 45 seconds\./)
+    expect(finds[1].user).toMatch(/Clip 3 \("too long"\) runs about \d+ seconds; the limit is 56 seconds\./)
   })
 
   it('reports segments out of order or overlapping, and lands them in order if not corrected', async () => {

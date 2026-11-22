@@ -47,7 +47,13 @@ or end sooner, undo either.
    as a continuous clip. Segments a breath apart are merged back into one
    moment. A joined clip is taken as proposed or dropped: one with a part under
    three seconds, more than three parts, or more played time than the length
-   cap is not trimmed to fit.
+   ceiling is not trimmed to fit. (Each length setting has a target and a
+   ceiling a quarter above it: short 45/56 s, medium 75/94 s, long and auto
+   100/125 s. A clip between the two is kept whole and ranked a few points
+   lower; past the ceiling it is repaired or dropped.) The one exception is a
+   long-range join still over the ceiling after its correction: whole
+   sentences are dropped from the end of its first part, then its last, and
+   the result faces the join review like any other.
 4. **Distant moments.** On a video read in more than one window, an outline of
    the whole video is used to find setups whose payoff lies further away than
    any window reaches (see below). The joined clips it produces join the same

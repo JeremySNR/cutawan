@@ -9,6 +9,9 @@ import {
   playedText,
   reviewedTime,
   formatTranscriptForModel,
+  lengthPenalty,
+  maxDurationFor,
+  softMaxDurationFor,
   planAnalysisWindows,
   snapClipEnd,
   snapClipStart,
@@ -417,3 +420,21 @@ describe('checkClipOpenings', () => {
   })
 })
 
+
+describe('length targets', () => {
+  it('allows a quarter past the target before a clip is trimmed, never past three minutes', () => {
+    expect([softMaxDurationFor('short'), maxDurationFor('short')]).toEqual([45, 56])
+    expect([softMaxDurationFor('medium'), maxDurationFor('medium')]).toEqual([75, 94])
+    expect([softMaxDurationFor('long'), maxDurationFor('long')]).toEqual([100, 125])
+    expect([softMaxDurationFor('auto'), maxDurationFor('auto')]).toEqual([100, 125])
+  })
+
+  it('costs nothing within the target and a few points past it, at most eight', () => {
+    expect(lengthPenalty(100, 100)).toBe(0)
+    expect(lengthPenalty(60, 100)).toBe(0)
+    expect(lengthPenalty(110, 100)).toBe(3)
+    expect(lengthPenalty(125, 100)).toBe(7)
+    expect(lengthPenalty(300, 100)).toBe(8)
+    expect(lengthPenalty(50, 0)).toBe(0)
+  })
+})

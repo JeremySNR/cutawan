@@ -173,15 +173,18 @@ function repairLengthBand(pref: ClipLengthPreference): string {
 }
 
 function lengthGuidance(pref: ClipLengthPreference): string {
+  const soft = softMaxDurationFor(pref)
+  const ceiling = maxDurationFor(pref)
+  const overrun = `Stay within ${soft} seconds. Go past it, never beyond ${ceiling}, only when the moment genuinely needs the extra seconds to land; an overrun counts against a clip when clips are ranked.`
   switch (pref) {
     case 'short':
-      return 'Aim for clips around 15-30 seconds long (from the start time of its first line to the end time of its last). Never exceed 45 seconds. If a moment is complete in less time, keep it short rather than padding it.'
+      return `Aim for clips around 15-30 seconds long (from the start time of its first line to the end time of its last). ${overrun} If a moment is complete in less time, keep it short rather than padding it.`
     case 'medium':
-      return 'Aim for clips around 30-60 seconds long (from the start time of its first line to the end time of its last). Never exceed 75 seconds. Favour the length the moment actually needs — do not pad a complete moment to fill the range.'
+      return `Aim for clips around 30-60 seconds long (from the start time of its first line to the end time of its last). ${overrun} Favour the length the moment actually needs — do not pad a complete moment to fill the range.`
     case 'long':
-      return 'Aim for clips around 60-90 seconds long (from the start time of its first line to the end time of its last). Never exceed 100 seconds. Only reach the top of the range when the moment genuinely sustains it; do not pad with setup or tangents.'
+      return `Aim for clips around 60-90 seconds long (from the start time of its first line to the end time of its last). ${overrun} Only reach the top of the range when the moment genuinely sustains it; do not pad with setup or tangents.`
     case 'auto':
-      return 'Choose whatever length lets each moment land — anywhere from about 15 to 90 seconds (never exceed 100). Cut to the moment; do not pad it to reach a length.'
+      return `Choose whatever length lets each moment land — anywhere from about 15 to 90 seconds. ${overrun} Cut to the moment; do not pad it to reach a length.`
     default: {
       const exhaustive: never = pref
       return exhaustive
@@ -189,8 +192,13 @@ function lengthGuidance(pref: ClipLengthPreference): string {
   }
 }
 
-/** Hard upper cap per preference, enforced after the LLM responds. */
-export function maxDurationFor(pref: ClipLengthPreference): number {
+/**
+ * The length a clip should stay within for a preference. Not a wall: a clip
+ * that runs past it, up to `maxDurationFor`, is kept whole and ranked a
+ * little lower (see `lengthPenalty`). Cutting a strong clip short of its
+ * payoff to honour a round number costs more than a few extra seconds.
+ */
+export function softMaxDurationFor(pref: ClipLengthPreference): number {
   switch (pref) {
     case 'short':
       return 45
@@ -205,6 +213,55 @@ export function maxDurationFor(pref: ClipLengthPreference): number {
       return exhaustive
     }
   }
+}
+
+/** How far past the soft limit a clip may run before it is trimmed or repaired. */
+const OVERRUN_ALLOWANCE = 0.25
+
+/**
+ * Hard upper cap per preference, enforced after the LLM responds: a quarter
+ * past the soft limit, and never past three minutes, the longest YouTube
+ * Shorts and Instagram Reels accept. Past this a clip is not a strong moment
+ * running long; in live runs it was a model that lost count of the seconds
+ * (150 to 310 s against a 100 s limit), and it is repaired or trimmed.
+ */
+export function maxDurationFor(pref: ClipLengthPreference): number {
+  return Math.min(PLATFORM_MAX_SEC, Math.round(softMaxDurationFor(pref) * (1 + OVERRUN_ALLOWANCE)))
+}
+const PLATFORM_MAX_SEC = 180
+
+/**
+ * Ranking points a clip loses for running past its soft limit: about one
+ * point per four percent over, at most eight. Small enough that a clearly
+ * better clip still ranks above a tidy ordinary one; large enough that of two
+ * similar clips the one that fits comes first.
+ */
+export function lengthPenalty(playedSec: number, softMaxSec: number): number {
+  if (!(playedSec > softMaxSec) || softMaxSec <= 0) return 0
+  return Math.min(MAX_LENGTH_PENALTY, Math.ceil(((playedSec - softMaxSec) / softMaxSec) * 25))
+}
+const MAX_LENGTH_PENALTY = 8
+
+/**
+ * Apply the overrun penalty to every clip from its final played length, once,
+ * after every review and the rerank have settled the clip and its score. The
+ * points come off the structure part (pacing is part of structure), and the
+ * clip says why.
+ */
+export function applyLengthPenalties(clips: Clip[], softMaxSec: number): Clip[] {
+  return clips.map((clip) => {
+    const played = selectedDuration(clip.edit)
+    const points = lengthPenalty(played, softMaxSec)
+    if (points === 0) return clip
+    const note = `Runs ${Math.round(played)} seconds, past the ${softMaxSec}-second target for this length; kept whole rather than cut short.`
+    const penalised = clip.scoreBreakdown
+      ? (() => {
+          const scoreBreakdown = { ...clip.scoreBreakdown!, structure: Math.max(0, clip.scoreBreakdown!.structure - points) }
+          return { ...clip, scoreBreakdown, viralityScore: scoreFromParts(scoreBreakdown) }
+        })()
+      : { ...clip, viralityScore: Math.max(0, clip.viralityScore - points) }
+    return { ...penalised, viralityReason: [clip.viralityReason?.trim(), note].filter(Boolean).join(' ') }
+  })
 }
 
 /**
@@ -1657,6 +1714,9 @@ export async function detectHighlights(
     ranked = await rerankCandidates(apiKey, model, transcript, trimmed, dangling, signal)
   }
   onProgress?.({ fraction: 1, message: 'Finding spoken moments…' })
+  // Last, on each clip as it will finally play, so neither a review nor the
+  // rerank can wash it out.
+  ranked = applyLengthPenalties(ranked, softMaxDurationFor(options.clipLength))
   // Refinement can pull two clips onto the same landing beat; dedupe again,
   // best first (the opening check's penalty may have changed the order).
   return dedupeClips([...ranked].sort((a, b) => b.viralityScore - a.viralityScore).filter((c) =>

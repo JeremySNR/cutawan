@@ -320,16 +320,16 @@ describe('detectHighlights joining distant moments (scripted model)', () => {
         ? { clips: [joinedClip(0, [[96, 106], [796, 807]], 'too long')], declined: [] }
         : { clips: [joinedClip(0, [[100, 103], [800, 803]], 'tight')], declined: [] }
     }
-    // Every line shown for both moments is far more than a short clip's 45 seconds.
+    // Every line shown for both moments is far more than a short clip's 56-second ceiling.
     const clips = await run({ clipLength: 'short' })
     expect(count('long_range_joins')).toBe(2)
     const repair = requests.filter((r) => r.schema === 'long_range_joins')[1]
-    expect(repair.user).toMatch(/Pairing 0 \("too long"\) runs about \d+ seconds; the limit is 45 seconds\. Do not just trim it to fit/)
+    expect(repair.user).toMatch(/Pairing 0 \("too long"\) runs about \d+ seconds; the limit is 56 seconds\. Do not just trim it to fit/)
     expect(clips.some((c) => c.title === 'tight' && c.stitch)).toBe(true)
   })
 
   it('fits a joined clip that stays too long by dropping whole sentences, last resort only, and still reviews it', async () => {
-    // Both answers take every line shown; on a short clip that is over 45 s each time.
+    // Both answers take every line shown; on a short clip that is over the 56 s ceiling each time.
     answers.long_range_joins = () => ({ clips: [joinedClip(0, [[96, 106], [796, 807]], 'still too long')], declined: [] })
     const clips = await run({ clipLength: 'short' })
     expect(count('long_range_joins')).toBe(2)
@@ -339,7 +339,7 @@ describe('detectHighlights joining distant moments (scripted model)', () => {
     expect(count('clip_joins')).toBe(1)
     const parts = selectedRanges(joined!.edit)
     expect(parts).toHaveLength(2)
-    expect(parts.reduce((sum, p) => sum + p.end - p.start, 0)).toBeLessThanOrEqual(45)
+    expect(parts.reduce((sum, p) => sum + p.end - p.start, 0)).toBeLessThanOrEqual(56)
     // Both openings are kept: the setup from line 96 and the payoff from line 796.
     expect(parts[0].start).toBeLessThanOrEqual(sentences[96].start)
     expect(parts[1].start).toBeLessThanOrEqual(sentences[796].start)
