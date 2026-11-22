@@ -47,6 +47,34 @@ export interface Transcript {
    * clip boundaries cut only in silence when present; older projects lack it.
    */
   speech?: SpeechRegion[]
+  /**
+   * Who speaks when, from on-device speaker diarization of the whole source.
+   * Speaker ids are small integers numbered in order of first appearance
+   * (0 is whoever speaks first). Absent when diarization did not run or found
+   * a single voice only; older projects lack it.
+   */
+  speakerTurns?: SpeakerTurn[]
+  /**
+   * Moments of non-speech audio excitement across the whole source
+   * (laughter, applause, a crowd, an impact, a music hit), in time order.
+   * `strength` is 0..1, relative to this source. Absent on older projects.
+   */
+  reactions?: AudioReaction[]
+}
+
+/** One stretch of one speaker's speech, in source seconds. */
+export interface SpeakerTurn {
+  start: number
+  end: number
+  speaker: number
+}
+
+/** A stretch of non-speech audio that stands out from the rest of the source. */
+export interface AudioReaction {
+  start: number
+  end: number
+  strength: number
+  kind?: 'laughter' | 'applause' | 'impact' | 'music' | 'other'
 }
 
 export type AspectRatio = '9:16' | '1:1' | '16:9' | 'original'
