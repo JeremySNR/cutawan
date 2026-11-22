@@ -129,3 +129,20 @@ describe('retake detection', () => {
     expect(kept === null || kept.some(r => r.start <= words[0].start + 0.01)).toBe(true)
   })
 })
+
+describe('false starts after a finished sentence', () => {
+  it.each([
+    'It was great. / It was amazing, really.',
+    'I love this city. / I love the people here and the food.',
+    'We need to act. / We need to act now, before it is too late.',
+    'This is the plan. / This is how we win the game.'
+  ])('keeps both sentences of %s', script => {
+    const words = speak(script)
+    expect(findRetakes(words)).toEqual([])
+    expect(playedText(words)).toBe(script.replace(' / ', ' '))
+  })
+
+  it('still drops an unfinished attempt before a pause', () => {
+    expect(playedText(speak('The main thing / the main thing is the price.'))).toBe('the main thing is the price.')
+  })
+})
