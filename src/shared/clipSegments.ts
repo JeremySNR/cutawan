@@ -62,6 +62,24 @@ export function sourceStretches(edit: Trim, minGapSec = SEPARATE_STRETCH_GAP_SEC
   return mergeNearbyRanges(selectedRanges(edit), minGapSec)
 }
 
+/**
+ * At most `max` stretches, by reading through the shortest gaps first. Each
+ * stretch an export opens is another decoder on the same file; a long edit
+ * with dozens of cuts must not open dozens of them.
+ */
+export function limitStretches(stretches: TimeRange[], max: number): TimeRange[] {
+  const out = stretches.map((stretch) => ({ ...stretch }))
+  while (out.length > Math.max(1, max)) {
+    let smallest = 1
+    for (let i = 2; i < out.length; i++) {
+      if (out[i].start - out[i - 1].end < out[smallest].start - out[smallest - 1].end) smallest = i
+    }
+    out[smallest - 1].end = out[smallest].end
+    out.splice(smallest, 1)
+  }
+  return out
+}
+
 /** Whether every one of `ranges` lies inside one of `covering`. */
 export function rangesCovered(ranges: TimeRange[], covering: TimeRange[], toleranceSec = 0.001): boolean {
   return ranges.every((range) =>

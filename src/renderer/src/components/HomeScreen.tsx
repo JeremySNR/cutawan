@@ -303,6 +303,7 @@ function SetupPanel(): React.JSX.Element {
   const [hookFirst, setHookFirst] = useState(settings?.subscription.provider !== 'chatgpt')
   const [visualDiscovery, setVisualDiscovery] = useState(project.visualDiscovery ?? false)
   const [editorialRanking, setEditorialRanking] = useState(project.rankingEnabled ?? false)
+  const [stitch, setStitch] = useState(false)
 
   // Captioning an already-transcribed video makes no API calls, so it does not
   // need a key; clip finding always does.
@@ -407,6 +408,21 @@ function SetupPanel(): React.JSX.Element {
                 </span>
               </label>
               <DiscoverySummary report={project.discoveryReport} earlierAttempt={!!project.discoveryReport?.generationId && project.discoveryReport.generationId !== project.clipsGenerationId} />
+            </div>
+            <div className="rounded-2xl border border-surface-700 bg-surface-900 p-5">
+              <label className="flex items-start gap-3 text-sm font-semibold">
+                <input type="checkbox" checked={stitch} onChange={e => setStitch(e.target.checked)}
+                  className="mt-1" data-testid="stitch-toggle" />
+                <span>Join separate moments <span className="font-normal text-zinc-400">(beta)</span>
+                  <span className="mt-1 block text-xs font-normal leading-relaxed text-zinc-400">
+                    Let a clip put two or three moments together when that makes a better one: a question and its
+                    answer with the tangent between them removed, or a setup and its later payoff. Most clips stay
+                    one continuous moment. Every join gets one extra AI review that it plays seamlessly and keeps
+                    what was said; joined clips are labelled, and you can move or undo the join in the editor.
+                    {' '}Looks for moments within about five minutes of each other.
+                  </span>
+                </span>
+              </label>
             </div>
             <div className="rounded-2xl border border-surface-700 bg-surface-900 p-5">
               <label className="flex items-center gap-2 text-sm font-semibold">
@@ -556,7 +572,7 @@ function SetupPanel(): React.JSX.Element {
                 data-testid="start-button"
                 onClick={() =>
                   mode === 'clips'
-                    ? void analyze({ prompt, clipLength, broll, hookFirst, videoType, visualDiscovery, editorialRanking })
+                    ? void analyze({ prompt, clipLength, broll, hookFirst, videoType, visualDiscovery, editorialRanking, stitch })
                     : void captionWholeVideo({
                         aspect: captionAspect,
                         followSpeaker,

@@ -157,3 +157,33 @@ export async function measureLoudness(
     return null
   }
 }
+
+/**
+ * Measure several stretches of the source as the one programme they will be
+ * exported as. A clip joined from distant moments is normalised on what it
+ * plays; the minutes between them have no say in its level (and are not
+ * decoded to find out).
+ */
+export async function measureLoudnessOfRanges(
+  sourcePath: string,
+  ranges: Array<{ start: number; end: number }>,
+  signal?: AbortSignal
+): Promise<LoudnessStats | null> {
+  if (ranges.length === 1) return measureLoudness(sourcePath, ranges[0].start, ranges[0].end - ranges[0].start, signal)
+  try {
+    const inputs = ranges.flatMap((range) => [
+      '-ss', range.start.toFixed(3), '-t', (range.end - range.start).toFixed(3), '-i', sourcePath
+    ])
+    const joined = `${ranges.map((_, i) => `[${i}:a]`).join('')}concat=n=${ranges.length}:v=0:a=1,${MEASURE_FILTER}`
+    const { stderr } = await runBinaryFull(
+      FFMPEG_PATH,
+      ['-hide_banner', '-nostats', ...inputs, '-filter_complex', joined, '-vn', '-f', 'null', '-'],
+      { signal }
+    )
+    return parseLoudnormStats(stderr)
+  } catch (err) {
+    if (signal?.aborted) throw err
+    console.error('Loudness measurement failed; using single-pass normalisation:', err)
+    return null
+  }
+}

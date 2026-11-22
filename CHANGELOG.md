@@ -12,6 +12,8 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
 - Every clip's score now shows what it is made of: hook, emotion, value, flow and shareability, plus the visual review. Clip cards show a letter for each, and the editor shows the numbers under **Why this clip**. Clips found before this update keep their old score, marked "Legacy score"; regenerate to see the breakdown.
 - Rest the pointer on a clip card to play that moment, muted, without opening the editor.
+- **Join separate moments (beta)**, an option on the setup screen. A clip can now put two or three moments together when that makes a better one: a question and its answer with the tangent between them removed, or a setup and its later payoff. Most clips still stay one continuous moment. Every join gets a separate AI review that it plays seamlessly and keeps what was said, and a joined clip that does not pass is dropped. Joined clips are labelled on their card and in the editor. On long videos it looks for moments within about five minutes of each other. [How it works and its limits](docs/joined-moments.md).
+- Drag the edge of any cut on the timeline to move it, so a piece can run a little longer or end a little sooner without undoing the cut.
 
 ### Improved
 
@@ -23,10 +25,13 @@ still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 - **Open on the hook** is now on by default on API connections, so clips start on their hook line rather than the setup before it. Turn it off on the setup screen to keep the earlier behaviour. It stays off by default on ChatGPT sign-in, where it costs one of the day's requests.
 - Captions in the big-word styles no longer show commas and full stops, which cluttered three-word cards ("WORKS." / "SO,"). Question marks, exclamation marks and ellipses stay. The subtitle-like styles (Minimal and Whisper) keep full punctuation. The preview and the export match.
 - The progress screen says which part of a long video is being analysed and when endings and openings are being checked.
+- A long cut is folded into a small marker on the editor timeline, so the footage either side of it gets the width and stays easy to trim.
+- Exporting a clip with a long cut no longer reads through the cut footage, and its volume is set from the audio that plays rather than from the whole stretch.
+- AI B-roll and post captions are now written from the words a clip plays, leaving out anything you have cut.
 
 ### Validation
 
-- Covered by automated tests with scripted model replies and by the offline render tests. The new long-video analysis, scoring and parallel transcription were not run against a live AI provider in this change.
+- Covered by automated tests with scripted model replies and by the offline render tests, including a real export of a joined clip. The new long-video analysis, scoring, parallel transcription and joined-moment selection were not run against a live AI provider in this change, so how often the AI proposes a good join on real footage is not yet measured.
 
 ## [0.14.0] - 2026-10-13
 

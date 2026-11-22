@@ -172,6 +172,44 @@ async function main(): Promise<void> {
     })
   }
 
+  // A clip joined from two moments, so the grid label, the folded timeline
+  // and the joined export path all have something to show.
+  const first = { start: 2, end: 12 }
+  const second = { start: 50, end: 62 }
+  clips.push({
+    id: 'demo-clip-joined',
+    suggestedStart: first.start,
+    suggestedEnd: second.end,
+    title: 'Practice first, then let the data decide',
+    hook: 'Your first videos are reps',
+    summary: 'The reframe of early content as practice, joined to the posting system it leads to.',
+    viralityScore: 58,
+    viralityReason: 'A clear claim paired with its practical answer; lower emotional peak.',
+    scoreBreakdown: { hook: 18, emotion: 10, value: 17, structure: 9, shareability: 4 },
+    visualSummary: null,
+    hashtags: ['contentplan', 'mindset'],
+    thumbnailPath: await extractThumbnail(videoPath, first.start + 2, join(thumbs, 'demo-clip-joined.jpg')),
+    broll: [],
+    focusTrack: null,
+    reframeStatus: 'done',
+    reframeAnalysis: { start: first.start, end: second.end, version: 2, ranges: [first, second] },
+    stitch: { segments: [first, second], reason: 'Demo fixture: skips the stretch about the algorithm between the claim and the system.' },
+    edit: {
+      aspect: '9:16',
+      reframeMode: 'crop',
+      framing: 'manual',
+      tightenCuts: false,
+      autoZoom: true,
+      focusX: 0.5,
+      captionsEnabled: true,
+      captionStyleId: DEFAULT_CAPTION_STYLE_ID,
+      showTitle: false,
+      start: first.start,
+      end: second.end,
+      cuts: [{ start: first.end, end: second.start }]
+    }
+  })
+
   const project: Project = {
     id: PROJECT_ID,
     createdAt: Date.now(),

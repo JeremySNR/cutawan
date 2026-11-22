@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   joinedMoments,
+  limitStretches,
   mergeNearbyRanges,
   rangesCovered,
   selectedDuration,
@@ -143,5 +144,19 @@ describe('mergeStretchAnalyses', () => {
       { focusTrack: null, contentType: 'screencast' }, { focusTrack: null, contentType: 'screencast' }
     ], stretches)
     expect(screen).toMatchObject({ focusTrack: null, contentType: 'screencast' })
+  })
+})
+
+describe('limitStretches', () => {
+  const many = [{ start: 0, end: 10 }, { start: 30, end: 40 }, { start: 400, end: 410 }, { start: 430, end: 440 }, { start: 900, end: 910 }]
+
+  it('leaves a short list alone', () => {
+    expect(limitStretches(many, 6)).toEqual(many)
+  })
+
+  it('reads through the shortest gaps first and keeps the long skips', () => {
+    expect(limitStretches(many, 3)).toEqual([{ start: 0, end: 40 }, { start: 400, end: 440 }, { start: 900, end: 910 }])
+    expect(limitStretches(many, 1)).toEqual([{ start: 0, end: 910 }])
+    expect(many[0]).toEqual({ start: 0, end: 10 })
   })
 })

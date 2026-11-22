@@ -17,7 +17,9 @@ import { formatBytes, formatDuration } from '../lib/format'
 import { EditorialExplanation, EditorialRankingSummary, EditorialScore } from './EditorialSummary'
 import MissingSourceBanner from './MissingSourceBanner'
 import DiscoverySummary from './DiscoverySummary'
-import type { Clip } from '@shared/types'
+import { JoinedBadge } from './JoinedMoments'
+import type { Clip, TimeRange } from '@shared/types'
+import { selectedRanges } from '@shared/clipSegments'
 import { findWholeVideoClip, highlightClips } from '@shared/wholeVideo'
 import { editedClipDuration } from '@shared/tighten'
 import { layoutReviewMessage } from '@shared/contentType'
@@ -179,8 +181,7 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
         {previewing && videoPath && (
           <HoverPreview
             src={window.cutawan.mediaUrl(videoPath)}
-            start={clip.edit.start}
-            end={clip.edit.end}
+            ranges={selectedRanges(clip.edit)}
             onFailed={() => setPreviewing(false)}
           />
         )}
@@ -190,12 +191,15 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
           </span>
           <EditorialScore clip={clip} current={assessmentCurrent} />
         </div>
-        {framing && (
-          <span className="absolute bottom-2.5 left-2.5 flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] font-medium text-zinc-300 backdrop-blur">
-            <Loader2 size={11} className="animate-spin" />
-            Framing…
-          </span>
-        )}
+        <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5">
+          {framing && (
+            <span className="flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] font-medium text-zinc-300 backdrop-blur">
+              <Loader2 size={11} className="animate-spin" />
+              Framing…
+            </span>
+          )}
+          <JoinedBadge clip={clip} />
+        </div>
         <span className="absolute bottom-2.5 right-2.5 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-200 backdrop-blur">
           {formatDuration(duration)}
         </span>
@@ -244,19 +248,20 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
 const HOVER_PREVIEW_DELAY_MS = 180
 
 /**
- * Plays the clip's span of the source, muted, over its thumbnail while the
- * pointer rests on the card. It is the uncropped source, the same picture as
+ * Plays what the clip selects from the source, muted, over its thumbnail
+ * while the pointer rests on the card. It is the uncropped source, the same picture as
  * the thumbnail — enough to hear nothing and still tell which moment this is
  * without opening the editor. The element exists only while hovering, so an
  * idle grid holds no decoders.
  */
-function HoverPreview({ src, start, end, onFailed }: {
+function HoverPreview({ src, ranges, onFailed }: {
   src: string
-  start: number
-  end: number
+  /** What the clip plays, in order: one range, or the moments of a joined clip. */
+  ranges: TimeRange[]
   onFailed: () => void
 }): React.JSX.Element {
   const [ready, setReady] = useState(false)
+  const start = ranges[0]?.start ?? 0
   return (
     <video
       data-testid="clip-hover-preview"
@@ -275,7 +280,10 @@ function HoverPreview({ src, start, end, onFailed }: {
         void e.currentTarget.play().catch(() => undefined)
       }}
       onTimeUpdate={(e) => {
-        if (e.currentTarget.currentTime >= end) e.currentTarget.currentTime = start
+        // Past the end of a moment: on to the next one, or round to the first.
+        const t = e.currentTarget.currentTime
+        if (ranges.some((range) => t >= range.start && t < range.end)) return
+        e.currentTarget.currentTime = ranges.find((range) => range.start > t)?.start ?? start
       }}
       onError={onFailed}
     />
