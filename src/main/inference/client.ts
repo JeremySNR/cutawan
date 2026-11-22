@@ -109,11 +109,23 @@ export class InferenceClient {
 }
 
 const compiledWorker = join(__dirname, 'inferenceWorker.js')
-const inference = new InferenceClient(
-  existsSync(compiledWorker) ? compiledWorker : join(__dirname, 'worker.ts'),
-  process.versions.electron ? [] : process.execArgv
-)
-process.once('exit', () => inference.close())
+
+/**
+ * A separate inference child. Long whole-source analyses use their own so a
+ * failure there (which latches a client until restart) cannot take down
+ * automatic framing, and so they can run alongside the shared one.
+ */
+export function createInferenceClient(timeoutMs?: number): InferenceClient {
+  const client = new InferenceClient(
+    existsSync(compiledWorker) ? compiledWorker : join(__dirname, 'worker.ts'),
+    process.versions.electron ? [] : process.execArgv,
+    timeoutMs
+  )
+  process.once('exit', () => client.close())
+  return client
+}
+
+const inference = createInferenceClient()
 export const runInference = inference.run.bind(inference)
 export const stopInference = inference.close.bind(inference)
 export const inferencePeakRssBytes = (): number => inference.peakRssBytes

@@ -60,7 +60,7 @@ function buildDctMatrix(): Float64Array[] {
 }
 
 /** In-place iterative radix-2 FFT over interleaved [re, im] pairs. */
-function fft(buf: Float64Array): void {
+export function fft(buf: Float64Array): void {
   const n = buf.length / 2
   // Bit-reversal permutation.
   for (let i = 1, j = 0; i < n; i++) {
