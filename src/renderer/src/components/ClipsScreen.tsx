@@ -24,7 +24,7 @@ import type { Clip, ExportCheckReport, TimeRange } from '@shared/types'
 import { exportCheckSummary } from '@shared/exportCheck'
 import { selectedRanges } from '@shared/clipSegments'
 import { findWholeVideoClip, highlightClips } from '@shared/wholeVideo'
-import { editedClipDuration } from '@shared/tighten'
+import { clipTimeline } from '@shared/clipTimeline'
 import { layoutReviewMessage } from '@shared/contentType'
 import { editorialAssessmentCurrent, editorialReportMatchesClips } from '@shared/editorialRanking'
 import { CLIP_KIND_LABELS } from '@shared/clipVariety'
@@ -163,7 +163,8 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
   const entry = exports[clip.id]
   const framing = useStore((s) => s.backgroundReframing[clip.id] === true)
   const transcript = useStore((s) => s.project?.transcript ?? null)
-  const duration = useMemo(() => editedClipDuration(clip, transcript), [clip, transcript])
+  // What the export plays, cold open included.
+  const duration = useMemo(() => clipTimeline(clip, transcript).outputDuration, [clip, transcript])
   const assessmentCurrent = useMemo(() => editorialAssessmentCurrent(clip, transcript), [clip, transcript])
   const videoPath = useStore((s) => s.project?.video.path)
   const [previewing, setPreviewing] = useState(false)
