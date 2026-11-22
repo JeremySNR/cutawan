@@ -254,12 +254,7 @@ export function applyLengthPenalties(clips: Clip[], softMaxSec: number): Clip[] 
     const points = lengthPenalty(played, softMaxSec)
     if (points === 0) return clip
     const note = `Runs ${Math.round(played)} seconds, past the ${softMaxSec}-second target for this length; kept whole rather than cut short.`
-    const penalised = clip.scoreBreakdown
-      ? (() => {
-          const scoreBreakdown = { ...clip.scoreBreakdown!, structure: Math.max(0, clip.scoreBreakdown!.structure - points) }
-          return { ...clip, scoreBreakdown, viralityScore: scoreFromParts(scoreBreakdown) }
-        })()
-      : { ...clip, viralityScore: Math.max(0, clip.viralityScore - points) }
+    const penalised = penalisePart(clip, 'structure', points)
     return { ...penalised, viralityReason: [clip.viralityReason?.trim(), note].filter(Boolean).join(' ') }
   })
 }
@@ -822,8 +817,17 @@ async function reviewInBatches(clips: Clip[], review: (batch: Clip[]) => Promise
   const size = Math.ceil(clips.length / batchCount)
   const batches = Array.from({ length: batchCount }, (_, i) => clips.slice(i * size, (i + 1) * size))
   const reviewed: Clip[][] = new Array(batches.length)
+  // A failed batch fails the review (the callers fall back as a whole), so
+  // once one has failed, start no more: their requests would go unread.
+  let failed = false
   await mapLimit(batches, WINDOW_CONCURRENCY, async (batch, i) => {
-    reviewed[i] = await review(batch)
+    if (failed) return
+    try {
+      reviewed[i] = await review(batch)
+    } catch (err) {
+      failed = true
+      throw err
+    }
   })
   return reviewed.flat()
 }
@@ -982,8 +986,19 @@ const DANGLING_HOOK_PENALTY = 8
 
 /** A clip's hook part (and total) lowered by `points`. Exported for tests. */
 export function penaliseHook(clip: Clip, points: number): Clip {
+  return penalisePart(clip, 'hook', points)
+}
+
+/**
+ * Take `points` off one rubric part and the total. What the part cannot
+ * absorb (a part already near zero, say after a rerank rescaled it) comes
+ * off the other parts in proportion, so a penalty is never partly lost.
+ */
+export function penalisePart(clip: Clip, part: 'hook' | 'structure', points: number): Clip {
   if (clip.scoreBreakdown) {
-    const scoreBreakdown = { ...clip.scoreBreakdown, hook: Math.max(0, clip.scoreBreakdown.hook - points) }
+    const taken = Math.min(points, clip.scoreBreakdown[part])
+    const reduced = { ...clip.scoreBreakdown, [part]: clip.scoreBreakdown[part] - taken }
+    const scoreBreakdown = points > taken ? rescaleScoreParts(reduced, scoreFromParts(reduced) - (points - taken)) : reduced
     return { ...clip, scoreBreakdown, viralityScore: scoreFromParts(scoreBreakdown) }
   }
   // No parts from a provider that ignored the schema: lower the total itself.
@@ -1410,8 +1425,10 @@ interface LongRangeResponse {
  * pairing's lines as valid ids, so the usual rules hold (played time under
  * the cap, no fragment, at most three parts), and a clip that does not
  * actually join the two moments is dropped: a continuous stretch of one of
- * them is what the windowed pass already offers. No repair request, so the
- * cost stays one. A failure costs only these clips.
+ * them is what the windowed pass already offers. An answer that breaks a rule
+ * gets one correction request, and a clip still over the ceiling after it is
+ * fitted by `fitJoinedSegments`, so the cost is at most two. A failure costs
+ * only these clips.
  */
 async function proposeLongRangeJoins(
   apiKey: string,
@@ -1655,20 +1672,35 @@ export async function detectHighlights(
   const windowed = windows.length > 1
 
   const find = async (insist: boolean): Promise<Clip[]> => {
-    const found: Clip[][] = new Array(windows.length)
+    const found: Clip[][] = new Array(windows.length).fill([])
     let finished = 0
+    let failed = 0
+    let firstError: unknown
     await mapLimit(windows, WINDOW_CONCURRENCY, async (window, i) => {
       signal?.throwIfAborted()
-      found[i] = await requestHighlights(apiKey, model, transcript, sentences, options, videoDurationSec, {
-        insist,
-        window: windowed ? { ...window, count: windows.length } : null
-      }, signal)
+      try {
+        found[i] = await requestHighlights(apiKey, model, transcript, sentences, options, videoDurationSec, {
+          insist,
+          window: windowed ? { ...window, count: windows.length } : null
+        }, signal)
+      } catch (err) {
+        // One part of a long video failing (after the client's own retries)
+        // costs that part's clips, not the whole analysis; the other parts
+        // carry on and are used. Cancellation and a ChatGPT limit still stop it.
+        throwIfSubscriptionError(err)
+        if (signal?.aborted) throw err
+        failed++
+        firstError ??= err
+        console.error(`Finding clips in part ${i + 1} of ${windows.length} failed; continuing with the other parts:`, err)
+      }
       finished++
       onProgress?.({
         fraction: (finished / windows.length) * FIND_SHARE,
         message: windowed ? `Finding spoken moments (${finished}/${windows.length})…` : 'Finding spoken moments…'
       })
     })
+    // Nothing was found at all: report the failure rather than "no moments".
+    if (failed === windows.length) throw firstError
     const clips = found.flat().sort((a, b) => b.viralityScore - a.viralityScore)
     // Overlapping windows propose the same moment twice; keep the better take.
     // Then hold the list to the size a single request would have been asked
@@ -1697,13 +1729,16 @@ export async function detectHighlights(
   const joinChecked = await reviewJoins(apiKey, model, transcript, found, signal)
   // Free and deterministic, so before the reviews: the ending and opening
   // reviews then judge the clip as it now opens.
-  const { clips, dangling } = checkClipOpenings(transcript, joinChecked, videoDurationSec, maxDuration)
   onProgress?.({ fraction: FIND_SHARE, message: 'Checking clip endings…' })
-  const refined = await refineClipEndings(apiKey, model, transcript, clips, videoDurationSec, maxDuration, signal)
+  const refined = await refineClipEndings(apiKey, model, transcript, joinChecked, videoDurationSec, maxDuration, signal)
   if (options.hookFirst) onProgress?.({ fraction: (1 + FIND_SHARE) / 2, message: 'Checking clip openings…' })
-  const trimmed = options.hookFirst
+  const reviewed = options.hookFirst
     ? await refineClipStarts(apiKey, model, transcript, refined, signal)
     : refined
+  // Free and deterministic, and after the opening review so it judges each
+  // clip's final opening: one the review already moved past "And…" is not
+  // penalised for it, and one the review moved onto "And…" is caught.
+  const { clips: trimmed, dangling } = checkClipOpenings(transcript, reviewed, videoDurationSec, maxDuration)
   // Windows scored their clips blind to each other; put them on one scale.
   // Last, so it judges each clip as it will finally play. A single request
   // already compared every clip it returned, and the scarce route cannot

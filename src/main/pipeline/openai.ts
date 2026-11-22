@@ -358,8 +358,11 @@ export interface TranscriptionPlan {
 function isLocalHost(base: string): boolean {
   try {
     const host = new URL(base).hostname.replace(/^\[|\]$/g, '')
-    return host === 'localhost' || host === '::1' || host.endsWith('.local') ||
-      /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
+    return host === 'localhost' || host === '::1' || host === '0.0.0.0' || host.endsWith('.local') ||
+      host.endsWith('.internal') || host.endsWith('.lan') || host.endsWith('.home.arpa') ||
+      /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) ||
+      // IPv6 unique-local (fc00::/7) and link-local (fe80::/10) addresses.
+      /^(f[cd][0-9a-f]{0,2}|fe[89ab][0-9a-f]?):/i.test(host)
   } catch {
     return true
   }

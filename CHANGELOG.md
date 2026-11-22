@@ -41,7 +41,7 @@ The biggest update to how Cutawan finds and cuts clips since the first release: 
 
 ### Costs and limits
 
-- On API connections, long videos use a few more analysis requests: one per twelve minutes of speech to find clips, one to compare them, and, with **Join separate moments** on, about one more per twelve minutes the first time the video is mapped (the map is saved and reused when you regenerate). That is typically a few cents per hour of video.
+- On API connections, long videos use more analysis requests: about one per twelve minutes of speech to find clips (one per six minutes with **Join separate moments** on, so moments a few minutes apart are seen together), occasionally one more to correct an answer, and one to compare the clips. With joining on, mapping the video adds about one request per twelve minutes the first time (the map is saved and reused when you regenerate) and up to two to propose distant joins. That is typically a few cents per hour of video.
 - ChatGPT sign-in keeps to its earlier request count: the whole transcript in one request, no correction or comparison passes, and no mapping for distant joins, because its requests count against a daily cap.
 
 ### Validation

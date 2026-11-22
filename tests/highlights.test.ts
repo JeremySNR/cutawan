@@ -324,10 +324,19 @@ describe('reviewedTime', () => {
 
 describe('penaliseHook', () => {
   it('lowers the hook part and recomputes the total from the parts', () => {
+    const c = { ...clip('a', 0, 20, 60), scoreBreakdown: { hook: 12, emotion: 20, value: 15, structure: 10, shareability: 5, visual: 80 } }
+    const out = penaliseHook(c, 8)
+    expect(out.scoreBreakdown).toEqual({ hook: 4, emotion: 20, value: 15, structure: 10, shareability: 5, visual: 80 })
+    expect(out.viralityScore).toBe(54)
+  })
+
+  it('takes what the hook part cannot absorb off the other parts, so no penalty is lost', () => {
     const c = { ...clip('a', 0, 20, 60), scoreBreakdown: { hook: 5, emotion: 20, value: 15, structure: 10, shareability: 5, visual: 80 } }
     const out = penaliseHook(c, 8)
-    expect(out.scoreBreakdown).toEqual({ hook: 0, emotion: 20, value: 15, structure: 10, shareability: 5, visual: 80 })
-    expect(out.viralityScore).toBe(50)
+    expect(out.scoreBreakdown?.hook).toBe(0)
+    expect(out.viralityScore).toBe(47)
+    expect(out.scoreBreakdown!.emotion + out.scoreBreakdown!.value + out.scoreBreakdown!.structure + out.scoreBreakdown!.shareability).toBe(47)
+    expect(out.scoreBreakdown?.visual).toBe(80)
   })
 
   it('lowers the total itself when there are no parts', () => {

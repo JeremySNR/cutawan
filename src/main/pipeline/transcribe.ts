@@ -236,7 +236,10 @@ export async function transcribeChunks(
     let guide = ''
     let rest = chunks.map((_, i) => i)
     if (plan.context === 'first' && chunks.length > 0) {
-      guide = tailBeforeNext(chunks, 0, await transcribe(0, '', signal))
+      // The opening, not the end, of the first chunk: hosts introduce the
+      // guest and the names Whisper needs to spell at the start.
+      const first = await transcribe(0, '', signal)
+      guide = trustedChunkText(first, chunks[1] ? chunks[1].offsetSec - chunks[0].offsetSec : Infinity).slice(0, 600)
       rest = rest.slice(1)
     }
     await mapLimit(rest, plan.concurrency, async (i) => {

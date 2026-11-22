@@ -99,12 +99,15 @@ found another way:
    left out, since that window could have joined them. Of the rest, the eight
    strongest go into one request that shows, for each pairing, the real numbered
    lines around the first moment and around the second (each range, up to
-   thirty lines of it, plus four lines either side). For each pairing the model
+   twelve lines of it, plus four lines either side, each line with how long it
+   plays). For each pairing the model
    returns one joined clip in the same format as the selection pass, or
    declines. The prompt carries the same selection and joining rules and says
    that declining is often the right answer. A clip may use only its own
    pairing's lines and must take a segment from each moment; it is landed with
-   the same rules as any other clip, without a repair request.
+   the same rules as any other clip. If an answer breaks a rule, one correction
+   request follows, as in the selection pass; a clip still over the length
+   ceiling after it has whole sentences trimmed (see Landing).
 
 The outline depends only on the transcript and the AI model, not on the
 instructions or clip length, so it is saved in the project folder
@@ -115,12 +118,16 @@ failed is never saved.
 **Requests.** For speech that spans *S* seconds (more than twenty minutes), the
 first run spends ⌈(*S* − 30) / 690⌉ mapping requests, one matching request
 (none when nothing was left open) and one proposing request (none when no
-pairing is too far apart for a window). That is 11 + 1 + 1 = 13 extra requests
-for a two-hour video, and 1 on later runs with the same transcript and model.
+pairing is too far apart for a window) plus at most one correction of it. That
+is up to 11 + 1 + 2 = 14 extra requests for a two-hour video, and up to 2 on
+later runs with the same transcript and model. Joining also widens the overlap
+between selection windows to six minutes, so selection itself takes about one
+request per six minutes of speech instead of one per twelve (19 windows rather
+than 13 for two hours), on every run.
 The joined clips it adds are judged by the join review like any other, which
 can add one join-review request when the windows produced no joined clips of
 their own. Videos read in one request, and runs with joining off, make none of
-these requests. ChatGPT sign-in makes none of them either: it reads the whole
+these requests and keep the narrower window overlap. ChatGPT sign-in makes none of them either: it reads the whole
 transcript in one request, so moments of any distance can be joined there, but
 only by that one request.
 

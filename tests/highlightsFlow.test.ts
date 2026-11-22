@@ -890,21 +890,37 @@ describe('detectHighlights checking clip openings (scripted model)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('skips lead-in fragments at the start of a clip, before the reviews see it', async () => {
+  it('skips lead-in fragments on the final opening, after the opening review', async () => {
     answers = {
       viral_clips: () => ({ clips: [raw(1, 6, 'lead-ins')] }),
       clip_endings: () => ({ endings: [] }),
       clip_openings: () => ({ starts: [] })
     }
     const [clip] = await detectHighlights('key', 'model', transcript, { ...options, hookFirst: true }, VIDEO)
+    // The opening review judged the clip as selected and left it alone…
+    const opening = requests.find((r) => r.schema === 'clip_openings')!
+    expect(opening.user).toContain('currently starts on line #1 at')
+    // …and the free check then skipped the throwaway lines it opens on.
     expect(clip.suggestedStart).toBeCloseTo(sentences[3].start - 0.25, 5)
     expect(clip.edit.start).toBe(clip.suggestedStart)
     expect(analyzeClipBoundaries(transcript, clip.edit.start, clip.edit.end).openingSentence).toBe(texts[3])
-    // The opening review still runs, on the new opening.
-    const opening = requests.find((r) => r.schema === 'clip_openings')!
-    expect(opening.user).toContain(`currently starts on line #3 at`)
-    expect(opening.user).not.toContain('Okay, so.')
     expect(clip.scoreBreakdown?.hook).toBe(20)
+  })
+
+  it('does not penalise an opening the opening review already moved past a dangling "And"', async () => {
+    // Lines 4 and 5 lean back too, so the free check could not have fixed line 6 itself.
+    const leaning = makeTranscript(texts.map((t, i) => i === 4 ? 'And they spend whatever is left after that.' : i === 5 ? 'But the rich do it the other way around.' : t),
+      { wordSec: 0.3, gapSec: 0.1, sentenceGapSec: 0.4 })
+    const lines = transcriptSentences(leaning)
+    answers = {
+      viral_clips: () => ({ clips: [raw(6, 10, 'moved')] }),
+      clip_endings: () => ({ endings: [] }),
+      clip_openings: () => ({ starts: [{ index: 0, opens_with_hook: false, better_start_line: 7, reason: 'hook is line 7' }] })
+    }
+    const [clip] = await detectHighlights('key', 'model', leaning, { ...options, hookFirst: true }, leaning.durationSec + 5)
+    expect(clip.suggestedStart).toBeCloseTo(lines[7].start - 0.25, 5)
+    expect(clip.viralityScore).toBe(55)
+    expect(clip.viralityReason).toBe('Strong claim.')
   })
 
   it('opens a clip that starts on a dangling "And" on the line it continues', async () => {
