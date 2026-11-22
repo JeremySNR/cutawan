@@ -154,7 +154,7 @@ export default function TimelineEditor({ clip, scale, timelines, fps, onSave, on
         onMarkClick={(mark) => {
           if (mark.kind === 'cut') onSave(uncutAt(edit, (mark.range.start + mark.range.end) / 2))
           else if (mark.kind === 'active') saveTrim(toggleActiveGap(edit, mark.range))
-          else saveTrim(toggleRemovedPause(edit, mark.range))
+          else saveTrim(toggleRemovedPause(edit, mark.range, clip.gapActivity?.active ?? []))
         }}
       />
       <div className="mt-2 flex flex-wrap items-center gap-1.5">

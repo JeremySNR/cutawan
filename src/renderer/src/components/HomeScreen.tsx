@@ -300,7 +300,11 @@ function SetupPanel(): React.JSX.Element {
   // On by default: the opening seconds decide whether a clip is watched. It
   // costs one more analysis request, so it stays opt-in on ChatGPT sign-in,
   // where requests count against a small daily cap.
-  const [hookFirst, setHookFirst] = useState(settings?.subscription.provider !== 'chatgpt')
+  // Derived rather than read once, so connecting ChatGPT (or leaving it)
+  // while this panel is open moves the default — until the user picks.
+  const [hookChoice, setHookChoice] = useState<boolean | null>(null)
+  const hookFirst = hookChoice ?? (settings?.subscription.provider !== 'chatgpt')
+  const setHookFirst = (on: boolean): void => setHookChoice(on)
   const [visualDiscovery, setVisualDiscovery] = useState(project.visualDiscovery ?? false)
   const [editorialRanking, setEditorialRanking] = useState(project.rankingEnabled ?? false)
   const [stitch, setStitch] = useState(false)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Captions,
   CaseUpper,
@@ -91,16 +91,29 @@ export default function EditorScreen(): React.JSX.Element {
   const paneKeys = scale.panes.map((pane) => `${videoPath}|${pane.start.toFixed(2)}|${pane.end.toFixed(2)}`)
   const timelineKey = paneKeys.join('\n')
   const [loadedTimelines, setLoadedTimelines] = useState<Record<string, TimelineData>>({})
+  // Which panes are already held, read by the effect without depending on the
+  // data it fills (so a fold or a drag back does not re-fetch them).
+  const loadedKeys = useRef(new Set<string>())
   useEffect(() => {
     if (!videoPath || sourceMissing) return
     let alive = true
-    for (const key of timelineKey.split('\n')) {
+    const wanted = new Set(timelineKey.split('\n'))
+    for (const key of wanted) {
+      if (loadedKeys.current.has(key)) continue
       // The last two fields: a file path can itself contain "|".
       const [from, to] = key.split('|').slice(-2)
       window.cutawan
         .getTimeline(videoPath, Number(from), Number(to))
         .then((data) => {
-          if (alive) setLoadedTimelines((loaded) => ({ ...loaded, [key]: data }))
+          if (!alive) return
+          // Keep only the current panes: each fold, drag or clip switch is a
+          // new set of keys, and old windows' filmstrips are never shown again.
+          loadedKeys.current = new Set([...loadedKeys.current].filter((k) => wanted.has(k)))
+          loadedKeys.current.add(key)
+          setLoadedTimelines((loaded) => ({
+            ...Object.fromEntries(Object.entries(loaded).filter(([k]) => wanted.has(k))),
+            [key]: data
+          }))
         })
         .catch(() => undefined) // timeline is progressive enhancement
     }
