@@ -306,6 +306,7 @@ export function registerIpcHandlers(): void {
         clipId: clip.id,
         outputPath: rendered.outputPath,
         bytes: rendered.bytes,
+        ...(rendered.check ? { check: rendered.check } : {}),
         ...(sizeTargetBytes !== undefined
           ? {
               sizeTargetBytes,

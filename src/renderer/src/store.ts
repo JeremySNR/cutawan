@@ -5,6 +5,7 @@ import type {
   CaptionVideoOptions,
   Clip,
   CustomFont,
+  ExportCheckReport,
   ImportProgress,
   PipelineProgress,
   Project,
@@ -87,6 +88,7 @@ export interface ExportEntry {
   sizeTargetBytes?: number
   downscaled?: boolean
   overBudget?: boolean
+  check?: ExportCheckReport
 }
 
 
@@ -539,7 +541,8 @@ export const useStore = create<AppState>((set, get) => ({
             bytes: result.bytes,
             sizeTargetBytes: result.sizeTargetBytes,
             downscaled: result.downscaled,
-            overBudget: result.overBudget
+            overBudget: result.overBudget,
+            check: result.check
           }
         }
       })

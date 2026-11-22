@@ -13,7 +13,7 @@ import type {
   VideoInfo,
   WatermarkPosition
 } from '@shared/types'
-import type { EncoderPreference } from '@shared/types'
+import type { EncoderPreference, ExportCheckReport } from '@shared/types'
 import { clipKeptSegments, editedClipDuration, remapTranscript, TimeMap, type KeptSegment } from '@shared/tighten'
 import { SEPARATE_STRETCH_GAP_SEC, limitStretches, sourceStretches } from '@shared/clipSegments'
 import type { TimeRange } from '@shared/types'
@@ -27,6 +27,7 @@ import { FFMPEG_PATH, probeVideo, runFfmpegWith } from './ffmpeg'
 import { timed } from './timing'
 import { loudnormFilter, measureLoudness, measureLoudnessOfRanges, normalisationMode, type LoudnessStats } from './loudness'
 import { buildAss, fontsDir } from './captions'
+import { checkExport } from './exportCheck'
 import { fontMetricsForFamily } from '../fonts'
 import { mediaJobs } from './mediaJobs'
 import {
@@ -701,6 +702,8 @@ export interface RenderResult {
   outputPath: string
   bytes: number
   sizePlan: UploadEncodePlan | null
+  /** The check after the render; see exportCheck.ts. */
+  check?: ExportCheckReport
 }
 
 export function renderClip(job: RenderJob): Promise<RenderResult> {
@@ -715,10 +718,12 @@ export function renderClip(job: RenderJob): Promise<RenderResult> {
         // Against what plays, not the trim span: a joined clip's trim includes
         // the minutes it skips, which left the bar stuck at 95%.
         onProgress: seconds => job.onProgress?.(.95 + .05 * Math.min(1, seconds / Math.max(.1, editedClipDuration(job.clip, job.transcript)))) }))
+      // Black, freezes, dead air, level and mid-word cuts; repaired in place when safe. Never fatal.
+      const check = await timed('export/check', () => checkExport(temporary, job, result))
       job.signal?.throwIfAborted()
       await rename(temporary, job.outputPath)
       job.onProgress?.(1)
-      return { ...result, outputPath: job.outputPath }
+      return { ...result, outputPath: job.outputPath, bytes: (await stat(job.outputPath)).size, check }
     } finally {
       await rm(temporary, { force: true }).catch(() => undefined)
     }
