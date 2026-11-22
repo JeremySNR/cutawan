@@ -31,6 +31,10 @@ export interface AudioAnalysisRaw {
   reactionFeatures?: ReactionFeatures
   /** Present when diarization ran to the end of the stream. */
   embedded?: Pick<SpeakerEmbedder, 'windows' | 'embeddings'>
+  /** Reactions were asked for but could not be measured. */
+  reactionsFailed?: boolean
+  /** Diarization was asked for but did not produce embeddings. */
+  speakersFailed?: boolean
 }
 
 /** Stream the source once and feed whichever analyses were asked for. */
@@ -39,6 +43,7 @@ export async function analyseSourceAudio(request: AudioAnalysisRequest, onProgre
   let reactions = request.reactions ? new ReactionAnalyzer() : null
   let embedder = request.diarize ? new SpeakerEmbedder(request.diarize.speech, request.diarize.modelPath, runner, signal) : null
   if (embedder && embedder.windowCount === 0) embedder = null
+  const diarizing = !!embedder
   if (!reactions && !embedder) return {}
   const totalSamples = Math.max(1, request.durationSec * REACTION_SAMPLE_RATE)
   let position = 0
@@ -53,26 +58,42 @@ export async function analyseSourceAudio(request: AudioAnalysisRequest, onProgre
       return false
     }
   }
-  await timed('audio-analysis/stream', () => streamRawFrames(
-    ['-v', 'error', '-i', request.videoPath, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', String(REACTION_SAMPLE_RATE), '-f', 'f32le'],
-    CHUNK_SAMPLES * 4,
-    async (frame) => {
-      // The frame is a view into ffmpeg's output buffer at any byte offset; copy to align.
-      const samples = new Float32Array(CHUNK_SAMPLES)
-      frame.copy(Buffer.from(samples.buffer))
-      const at = position
-      position += CHUNK_SAMPLES
-      if (reactions && !(await isolate('reactions', () => reactions!.push(samples)))) reactions = null
-      if (embedder && !(await isolate('speakers', () => embedder!.push(samples, at)))) embedder = null
-      const fraction = Math.min(1, position / totalSamples)
-      if (Math.floor(fraction * 100) !== reported) { reported = Math.floor(fraction * 100); onProgress(fraction) }
-    },
-    signal
-  ), { audioSec: Math.round(request.durationSec), reactions: !!reactions, speakers: embedder?.windowCount ?? 0 })
+  const stopped = new Error('Both audio analyses stopped')
+  try {
+    await timed('audio-analysis/stream', () => streamRawFrames(
+      ['-v', 'error', '-i', request.videoPath, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', String(REACTION_SAMPLE_RATE), '-f', 'f32le'],
+      CHUNK_SAMPLES * 4,
+      async (frame) => {
+        // The frame is a view into ffmpeg's output buffer at any byte offset; copy to align.
+        const samples = new Float32Array(CHUNK_SAMPLES)
+        frame.copy(Buffer.from(samples.buffer))
+        const at = position
+        position += CHUNK_SAMPLES
+        if (reactions && !(await isolate('reactions', () => reactions!.push(samples)))) reactions = null
+        if (embedder && !(await isolate('speakers', () => embedder!.push(samples, at)))) embedder = null
+        // Nothing left to feed: stop decoding the rest of the source.
+        if (!reactions && !embedder) throw stopped
+        const fraction = Math.min(1, position / totalSamples)
+        if (Math.floor(fraction * 100) !== reported) { reported = Math.floor(fraction * 100); onProgress(fraction) }
+      },
+      signal
+    ), { audioSec: Math.round(request.durationSec), reactions: !!reactions, speakers: embedder?.windowCount ?? 0 })
+  } catch (error) {
+    if (signal?.aborted) throw error
+    if (error !== stopped) {
+      // A damaged tail makes ffmpeg exit non-zero after decoding most of the
+      // source. The reaction features measured so far still describe what
+      // played; diarization needs the whole stream, so it is dropped.
+      console.error('Audio analysis stream failed; keeping the reactions measured so far:', error)
+      embedder = null
+    }
+  }
   if (embedder && !(await isolate('speakers', () => embedder!.flush()))) embedder = null
   return {
     reactionFeatures: reactions?.finish(),
-    embedded: embedder ? { windows: embedder.windows, embeddings: embedder.embeddings } : undefined
+    embedded: embedder ? { windows: embedder.windows, embeddings: embedder.embeddings } : undefined,
+    ...(request.reactions && !reactions ? { reactionsFailed: true } : {}),
+    ...(diarizing && !embedder ? { speakersFailed: true } : {})
   }
 }
 
