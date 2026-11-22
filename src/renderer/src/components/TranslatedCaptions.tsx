@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { Clip, Project } from '@shared/types'
 import { resolveCaptionStyle } from '@shared/captionStyles'
-import { captionPositionAt } from '@shared/contentRegion'
-import { detailCaptionRanges } from '@shared/contentType'
+import { captionPositionAt, type CaptionPositionRange } from '@shared/contentRegion'
 import {
   CAPTION_LINE_HEIGHT_EM,
   translatedCaptionPlan,
@@ -28,6 +27,7 @@ export function TranslatedCaptionOverlay({
   outputTime,
   outputOffset = 0,
   sourceTime,
+  positionRanges,
   aspectRatio
 }: {
   project: Project
@@ -40,6 +40,12 @@ export function TranslatedCaptionOverlay({
   outputTime: number
   /** Playhead in source seconds, for layout bands. */
   sourceTime: number
+  /**
+   * Caption moves in source time, the same clipCaptionPositionRanges plan the
+   * original captions and the export follow (faces, burned-in text, detail
+   * views).
+   */
+  positionRanges: CaptionPositionRange[]
   aspectRatio: number
 }): React.JSX.Element | null {
   const brandColors = useStore((s) => s.settings?.branding.colors)
@@ -59,7 +65,7 @@ export function TranslatedCaptionOverlay({
 
   const scale = plan.layout.fontScale / style.fontScale
   const outline = translatedOutlineWidth(style, scale)
-  const y = translatedCaptionY(style, plan.mode, captionPositionAt(detailCaptionRanges(clip), sourceTime, style.positionY))
+  const y = translatedCaptionY(style, plan.mode, captionPositionAt(positionRanges, sourceTime, style.positionY))
   return (
     <div
       data-testid="translated-captions"
