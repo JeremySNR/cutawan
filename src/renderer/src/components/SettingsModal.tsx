@@ -27,6 +27,7 @@ import { useStore } from '../store'
 import { NotesList, userNotes, WhatsNewDialog } from './WhatsNew'
 import { parseNotes } from '@shared/releaseNotes'
 import SizeTargetControls from './SizeTargetControls'
+import PersonalisationSettings from './PersonalisationSettings'
 import { DEFAULT_BRAND_COLORS, resolveCaptionStyle } from '@shared/captionStyles'
 import type {
   BrandColors,
@@ -319,6 +320,8 @@ export default function SettingsModal(): React.JSX.Element {
             ))}
           </select>
               </div>
+
+              <PersonalisationSettings />
 
               <button
                 onClick={() => void save()}

@@ -7,10 +7,15 @@ import type {
   CustomFont,
   ExportOptions,
   BackgroundReframeEvent,
+  BatchItemSource,
+  BatchQueueState,
   ExportProgress,
   ExportResult,
   GpuEncoderStatus,
   ImportProgress,
+  NleExportOptions,
+  NleExportResult,
+  PersonalisationSummary,
   PipelineProgress,
   Project,
   ProjectSummary,
@@ -36,6 +41,7 @@ const api = {
   },
   selectVideo: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectVideo'),
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
+  selectVideos: (): Promise<string[]> => ipcRenderer.invoke('dialog:selectVideos'),
 
   createProject: (videoPath: string): Promise<Project> => ipcRenderer.invoke('project:create', videoPath),
   createProjectFromUrl: (url: string): Promise<Project> =>
@@ -67,6 +73,28 @@ const api = {
   exportClip: (projectId: string, opts: ExportOptions): Promise<ExportResult> =>
     ipcRenderer.invoke('clip:export', projectId, opts),
   cancelExport: (clipId: string): Promise<void> => ipcRenderer.invoke('clip:cancelExport', clipId),
+  exportEdit: (projectId: string, opts: NleExportOptions): Promise<NleExportResult> =>
+    ipcRenderer.invoke('clip:exportEdit', projectId, opts),
+
+  getPersonalisation: (): Promise<PersonalisationSummary> => ipcRenderer.invoke('personalisation:get'),
+  setPersonalisationEnabled: (enabled: boolean): Promise<PersonalisationSummary> =>
+    ipcRenderer.invoke('personalisation:setEnabled', enabled),
+  resetPersonalisation: (): Promise<PersonalisationSummary> => ipcRenderer.invoke('personalisation:reset'),
+
+  getBatchQueue: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:state'),
+  addToBatch: (sources: BatchItemSource[], options: AnalyzeOptions): Promise<BatchQueueState> =>
+    ipcRenderer.invoke('batch:add', sources, options),
+  startBatch: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:start'),
+  pauseBatch: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:pause'),
+  cancelBatchItem: (id: string): Promise<BatchQueueState> => ipcRenderer.invoke('batch:cancel', id),
+  removeBatchItem: (id: string): Promise<BatchQueueState> => ipcRenderer.invoke('batch:remove', id),
+  retryBatchItem: (id: string): Promise<BatchQueueState> => ipcRenderer.invoke('batch:retry', id),
+  clearFinishedBatch: (): Promise<BatchQueueState> => ipcRenderer.invoke('batch:clearFinished'),
+  onBatchState: (cb: (state: BatchQueueState) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, state: BatchQueueState): void => cb(state)
+    ipcRenderer.on('batch:state', listener)
+    return () => ipcRenderer.removeListener('batch:state', listener)
+  },
   generateCaption: (projectId: string, clipId: string): Promise<Project> =>
     ipcRenderer.invoke('clip:generateCaption', projectId, clipId),
 

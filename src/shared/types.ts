@@ -363,11 +363,27 @@ export interface Project {
   editorialRanking?: EditorialRankingReport
   /** Flow that last ran on this project; absent on clip-finding projects. */
   mode?: ProjectMode
+  /** Reuse licence reported for a URL import; absent for local files. */
+  importLicence?: ImportLicence
+  /**
+   * Set when the current clip list was re-ranked from the user's own
+   * export and edit history (see shared/personalisation.ts).
+   */
+  personalised?: { generationId: string; positives: number }
   /**
    * True when the source video no longer exists on disk (moved/deleted).
    * Transient — recomputed on load, never persisted.
    */
   sourceMissing?: boolean
+}
+
+/** What a URL import's source said about reuse. */
+export interface ImportLicence {
+  url: string
+  /** The licence as the site reports it; null when it reports none. */
+  license: string | null
+  /** True for Creative Commons and public-domain licences. */
+  reusable: boolean
 }
 
 export interface ProjectSummary {
@@ -446,6 +462,70 @@ export interface ExportOptions {
   clipId: string
   /** Target directory; a file name is derived from the clip title. */
   outputDir: string
+}
+
+/** Editing-timeline formats offered by "Export edit for…". */
+export type NleFormat = 'fcpxml' | 'xmeml'
+
+export interface NleExportOptions {
+  clipId: string
+  format: NleFormat
+  /** Target directory; file names are derived from the clip title. */
+  outputDir: string
+}
+
+export interface NleExportResult {
+  clipId: string
+  format: NleFormat
+  /** The timeline file (.fcpxml or .xml). */
+  outputPath: string
+  /** Caption sidecar, when the project has a transcript with words in the clip. */
+  srtPath: string | null
+  /** Clips on the timeline (kept segments after pause removal and cuts). */
+  segments: number
+}
+
+/** Local learning from which clips the user keeps (see shared/personalisation.ts). */
+export interface PersonalisationSummary {
+  enabled: boolean
+  /** Distinct clips exported or edited. */
+  positives: number
+  /** Clips recorded in all. */
+  recorded: number
+  /** Positives needed before re-ranking starts. */
+  minPositives: number
+  /** True when new runs are being re-ranked. */
+  active: boolean
+}
+
+export type BatchItemSource = { kind: 'file'; path: string } | { kind: 'url'; url: string }
+
+export type BatchItemStatus = 'queued' | 'importing' | 'analysing' | 'done' | 'failed' | 'cancelled'
+
+export interface BatchItem {
+  id: string
+  source: BatchItemSource
+  /** File name or URL, until the import names the project. */
+  label: string
+  /** Settings snapshot taken when the item was added. */
+  options: AnalyzeOptions
+  status: BatchItemStatus
+  /** 0..1 within this item, or -1 when indeterminate. */
+  progress: number
+  message: string
+  error?: string
+  /** Set once the import has created the project. */
+  projectId?: string
+  clipCount?: number
+  /** Reuse licence of a URL import, once known. */
+  licence?: ImportLicence
+  addedAt: number
+}
+
+export interface BatchQueueState {
+  items: BatchItem[]
+  /** True while the queue works through its items. */
+  running: boolean
 }
 
 export interface ExportProgress {
@@ -698,6 +778,8 @@ export interface ImportProgress {
   /** 0..1, or -1 when indeterminate. */
   progress: number
   message: string
+  /** A URL import's reuse licence, sent once the metadata is read. */
+  licence?: ImportLicence
 }
 
 /** Editor timeline data for a window of the source video. */
