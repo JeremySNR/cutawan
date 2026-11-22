@@ -32,6 +32,7 @@ export default function ClipsScreen(): React.JSX.Element {
   const exportDir = useStore((s) => s.exportDir)
   const chooseExportDir = useStore((s) => s.chooseExportDir)
   const goHome = useStore((s) => s.goHome)
+  const setSettingsOpen = useStore((s) => s.setSettingsOpen)
   const [exportingAll, setExportingAll] = useState(false)
 
   if (!project) return <div />
@@ -43,6 +44,8 @@ export default function ClipsScreen(): React.JSX.Element {
   const currentRanking = editorialReportMatchesClips(project)
   const earlierRanking = !!project.editorialRanking && !currentRanking
   const doneCount = clips.filter((c) => exports[c.id]?.status === 'done').length
+  // Only for the run it applied to: a later run without it replaces the note.
+  const personalised = project.personalised?.generationId === project.clipsGenerationId ? project.personalised : null
 
   return (
     <div className="h-full overflow-y-auto">
@@ -57,6 +60,15 @@ export default function ClipsScreen(): React.JSX.Element {
               {earlierRanking ? 'Saved clips from an earlier run; the latest attempt did not replace them.' : currentRanking ? 'Ordered for complete stories, editorial quality and variety.' : 'Saved AI selections.'}
               {' '}Review each clip before exporting; scores estimate editorial quality, not audience performance.
             </p>
+            {personalised && (
+              <p data-testid="personalised-note" className="mt-1 flex items-center gap-1.5 text-xs text-zinc-500">
+                <Sparkles size={12} className="shrink-0 text-accent-400" />
+                Ranking nudged towards clips like the {personalised.positives} you exported or edited.{' '}
+                <button type="button" onClick={() => setSettingsOpen(true)} className="underline decoration-zinc-600 hover:text-zinc-300">
+                  Change in Settings
+                </button>
+              </p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <button

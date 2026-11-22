@@ -2,6 +2,10 @@ import { create } from 'zustand'
 import type {
   AnalyzeOptions,
   AppSettings,
+  BatchItemSource,
+  BatchQueueState,
+  NleFormat,
+  PersonalisationSummary,
   CaptionVideoOptions,
   Clip,
   CustomFont,
@@ -77,6 +81,15 @@ export function editorBackScreen(project: Project | null, clipId: string | null)
     return 'home'
   }
   return 'clips'
+}
+
+/** "Export edit for…" state per clip. */
+export interface EditExportEntry {
+  status: 'exporting' | 'done' | 'error'
+  format: NleFormat
+  outputPath?: string
+  srtPath?: string | null
+  error?: string
 }
 
 export interface ExportEntry {
@@ -170,6 +183,25 @@ interface AppState {
   openUpdateInstaller: () => Promise<void>
   cancelUpdateDownload: () => Promise<void>
   updateFromSource: () => Promise<void>
+
+  editExports: Record<string, EditExportEntry>
+  /** Write the clip's edit as an NLE timeline (plus SRT) into the export folder. */
+  exportEdit: (clipId: string, format: NleFormat) => Promise<void>
+
+  personalisation: PersonalisationSummary | null
+  refreshPersonalisation: () => Promise<void>
+  setPersonalisationEnabled: (enabled: boolean) => Promise<void>
+  resetPersonalisation: () => Promise<void>
+
+  batch: BatchQueueState
+  batchError: string | null
+  addToBatch: (sources: BatchItemSource[], options: AnalyzeOptions) => Promise<void>
+  startBatch: () => Promise<void>
+  pauseBatch: () => Promise<void>
+  cancelBatchItem: (id: string) => Promise<void>
+  removeBatchItem: (id: string) => Promise<void>
+  retryBatchItem: (id: string) => Promise<void>
+  clearFinishedBatch: () => Promise<void>
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -198,6 +230,10 @@ export const useStore = create<AppState>((set, get) => ({
   reframeError: {},
   backgroundReframing: {},
   historyVersion: 0,
+  editExports: {},
+  personalisation: null,
+  batch: { items: [], running: false },
+  batchError: null,
 
   init: async () => {
     const [settings, projects, customFonts] = await Promise.all([
@@ -207,6 +243,9 @@ export const useStore = create<AppState>((set, get) => ({
     ])
     set({ settings, projects, customFonts })
     void registerFonts(customFonts)
+    void get().refreshPersonalisation()
+    window.cutawan.onBatchState((batch) => applyBatchState(batch))
+    void window.cutawan.getBatchQueue().then(applyBatchState).catch(() => undefined)
     window.cutawan.onPipelineProgress((p) => set({ pipelineProgress: p }))
     window.cutawan.onImportProgress((p) => {
       if (get().importProgress === null) return
@@ -675,6 +714,56 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  exportEdit: async (clipId, format) => {
+    const project = get().project
+    if (!project || get().editExports[clipId]?.status === 'exporting') return
+    let dir = get().exportDir
+    if (!dir) {
+      dir = await window.cutawan.selectDirectory()
+      if (!dir) return
+      set({ exportDir: dir })
+    }
+    set({ editExports: { ...get().editExports, [clipId]: { status: 'exporting', format } } })
+    try {
+      const result = await window.cutawan.exportEdit(project.id, { clipId, format, outputDir: dir })
+      set({ editExports: { ...get().editExports, [clipId]: { status: 'done', format, outputPath: result.outputPath, srtPath: result.srtPath } } })
+      void get().refreshPersonalisation()
+    } catch (err) {
+      const message = err instanceof Error ? cleanIpcError(err.message) : String(err)
+      set({ editExports: { ...get().editExports, [clipId]: { status: 'error', format, error: message } } })
+    }
+  },
+
+  refreshPersonalisation: async () => {
+    try {
+      set({ personalisation: await window.cutawan.getPersonalisation() })
+    } catch {
+      /* Settings shows the toggle without counts */
+    }
+  },
+
+  setPersonalisationEnabled: async (enabled) => {
+    set({ personalisation: await window.cutawan.setPersonalisationEnabled(enabled) })
+  },
+
+  resetPersonalisation: async () => {
+    set({ personalisation: await window.cutawan.resetPersonalisation() })
+  },
+
+  addToBatch: async (sources, options) => {
+    try {
+      set({ batch: await window.cutawan.addToBatch(sources, options), batchError: null })
+    } catch (err) {
+      set({ batchError: err instanceof Error ? cleanIpcError(err.message) : String(err) })
+    }
+  },
+  startBatch: async () => applyBatchState(await window.cutawan.startBatch()),
+  pauseBatch: async () => applyBatchState(await window.cutawan.pauseBatch()),
+  cancelBatchItem: async (id) => applyBatchState(await window.cutawan.cancelBatchItem(id)),
+  removeBatchItem: async (id) => applyBatchState(await window.cutawan.removeBatchItem(id)),
+  retryBatchItem: async (id) => applyBatchState(await window.cutawan.retryBatchItem(id)),
+  clearFinishedBatch: async () => applyBatchState(await window.cutawan.clearFinishedBatch()),
+
   updateFromSource: async () => {
     if (get().sourceUpdate.status === 'running') return
     set({ sourceUpdate: { status: 'running', message: 'Starting…' } })
@@ -700,6 +789,28 @@ export const useStore = create<AppState>((set, get) => ({
     }
   }
 }))
+
+/**
+ * Take a batch queue update from main. When an item finishes, its project
+ * joins Recent projects; if that project is the one open on the setup
+ * screen, reload it so its new clips show.
+ */
+function applyBatchState(batch: BatchQueueState): void {
+  const { batch: previous, project, screen } = useStore.getState()
+  useStore.setState({ batch })
+  const finished = batch.items.filter((item) =>
+    item.projectId && (item.status === 'done' || item.status === 'importing' || item.status === 'analysing') &&
+    previous.items.find((p) => p.id === item.id)?.status !== item.status)
+  if (finished.length === 0) return
+  void useStore.getState().refreshProjects()
+  const reload = finished.find((item) => item.status === 'done' && item.projectId === project?.id)
+  if (reload && screen === 'home') {
+    void window.cutawan.loadProject(reload.projectId!).then((fresh) => {
+      if (useStore.getState().project?.id === fresh.id) useStore.setState({ project: fresh })
+    }).catch(() => undefined)
+  }
+  if (finished.some((item) => item.status === 'done')) void useStore.getState().refreshPersonalisation()
+}
 
 /** Electron prefixes IPC errors with "Error invoking remote method '...': Error:". */
 function cleanIpcError(message: string): string {

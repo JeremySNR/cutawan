@@ -19,6 +19,7 @@ import {
 import { useStore } from '../store'
 import { formatDuration, formatBytes } from '../lib/format'
 import MissingSourceBanner from './MissingSourceBanner'
+import BatchQueue from './BatchQueue'
 import DiscoverySummary from './DiscoverySummary'
 import { EditorialRankingSummary } from './EditorialSummary'
 import { SOURCE_DISCOVERY_BUDGET } from '@shared/sourceAnalysis'
@@ -59,11 +60,14 @@ const LENGTH_OPTIONS: Array<{ value: ClipLengthPreference; label: string; hint: 
 
 export default function HomeScreen(): React.JSX.Element {
   const project = useStore((s) => s.project)
+  // The queue stays in view while it has items, even with a project open.
+  const hasQueue = useStore((s) => s.batch.items.length > 0)
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-8 py-10">
         {project ? <SetupPanel /> : <ImportHero />}
+        {(!project || hasQueue) && <BatchQueue />}
         <RecentProjects />
       </div>
     </div>

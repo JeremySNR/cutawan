@@ -7,13 +7,25 @@ import { copyFile, mkdir, rm } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import type {
   AnalyzeOptions,
+  BatchItemSource,
   CaptionVideoOptions,
   Clip,
   ExportOptions,
+  NleExportOptions,
+  PipelineProgress,
   Project,
   SettingsUpdate
 } from '@shared/types'
-import { VIDEO_EXTENSIONS } from '@shared/video'
+import { isVideoFile, VIDEO_EXTENSIONS } from '@shared/video'
+import { exportClipEdit } from './nleExport'
+import { BatchQueue } from './batchQueue'
+import {
+  getPersonalisationSummary,
+  isLearningEdit,
+  recordClipAction,
+  resetPersonalisation,
+  setPersonalisationEnabled
+} from './personalisation'
 import { sizeTargetBytesFromMb } from '@shared/uploadBudget'
 import { mergeClipSave, needsReframe } from '@shared/reframe'
 import { analyzeProject, createProject, createProjectFromUrl } from './pipeline'
@@ -67,6 +79,66 @@ async function pickVideoFile(sender: Electron.WebContents, title: string): Promi
   return result.canceled ? null : result.filePaths[0]
 }
 
+/**
+ * Analyse a project under its lock, cancellable from 'project:cancelAnalyze'
+ * and, for batch items, from the queue's own signal. Shared by the
+ * single-video flow and the batch queue so both behave the same.
+ */
+async function runAnalysis(
+  projectId: string,
+  options: AnalyzeOptions,
+  onProgress: (p: PipelineProgress) => void,
+  signal?: AbortSignal
+): Promise<Project> {
+  if (runningAnalyses.has(projectId)) {
+    throw new Error('This project is already being analyzed.')
+  }
+  const controller = new AbortController()
+  const forward = (): void => controller.abort()
+  if (signal?.aborted) controller.abort()
+  signal?.addEventListener('abort', forward, { once: true })
+  runningAnalyses.set(projectId, controller)
+  cancelBackgroundReframes(projectId)
+  try {
+    const project = await loadProject(projectId)
+    if (project.sourceMissing) {
+      throw new Error(
+        `The source video is missing (${project.video.path}). Relink it before generating clips.`
+      )
+    }
+    return await analyzeProject(project, options, onProgress, controller.signal)
+  } catch (err) {
+    if (controller.signal.aborted) throw new Error(ANALYSIS_CANCELLED_MESSAGE, { cause: err })
+    throw err
+  } finally {
+    signal?.removeEventListener('abort', forward)
+    runningAnalyses.delete(projectId)
+  }
+}
+
+/** Record a learning action without holding up the IPC reply. */
+function learn(projectId: string, clip: Clip, action: 'exported' | 'edited'): void {
+  void recordClipAction(projectId, clip, action).catch((err) => console.error('Could not record clip action:', err))
+}
+
+let batchQueue: BatchQueue | null = null
+
+/** The batch queue, created on first use (it reads its saved state once). */
+function getBatchQueue(): BatchQueue {
+  batchQueue ??= new BatchQueue({
+    filePath: join(app.getPath('userData'), 'batch-queue.json'),
+    importFile: (path) => createProject(path),
+    importUrl: (url, onProgress, signal) => createProjectFromUrl(url, onProgress, signal),
+    analyze: (projectId, options, onProgress, signal) => runAnalysis(projectId, options, onProgress, signal),
+    emit: (state) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send('batch:state', state)
+      }
+    }
+  })
+  return batchQueue
+}
+
 export function registerIpcHandlers(): void {
   const activity = new UpdateActivity()
   const handle: typeof ipcMain.handle = (channel, listener) => {
@@ -82,6 +154,18 @@ export function registerIpcHandlers(): void {
   })
   handle('dialog:selectVideo', async (event) => {
     return pickVideoFile(event.sender, 'Choose a video')
+  })
+
+  handle('dialog:selectVideos', async (event) => {
+    // Headless/CI hook (like CUTAWAN_SELECT_VIDEO): skip the native dialog.
+    if (process.env.CUTAWAN_SELECT_VIDEOS) return process.env.CUTAWAN_SELECT_VIDEOS.split(',')
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Choose videos to queue',
+      properties: ['openFile', 'multiSelections'],
+      filters: VIDEO_FILTERS
+    })
+    return result.canceled ? [] : result.filePaths
   })
 
   handle('dialog:selectDirectory', async (event) => {
@@ -106,38 +190,14 @@ export function registerIpcHandlers(): void {
   })
 
   handle('project:analyze', async (event, projectId: string, options: AnalyzeOptions) => {
-    if (runningAnalyses.has(projectId)) {
-      throw new Error('This project is already being analyzed.')
-    }
-    const controller = new AbortController()
-    runningAnalyses.set(projectId, controller)
-    cancelBackgroundReframes(projectId)
-    try {
-      const project = await loadProject(projectId)
-      if (project.sourceMissing) {
-        throw new Error(
-          `The source video is missing (${project.video.path}). Relink it before generating clips.`
-        )
-      }
-      const analysed = await analyzeProject(
-        project,
-        options,
-        (p) => {
-          if (!event.sender.isDestroyed()) event.sender.send('pipeline:progress', p)
-        },
-        controller.signal
-      )
-      // Show the clips now; the top clips' layouts finish in the background.
-      void startBackgroundReframes(analysed, (state) => {
-        if (!event.sender.isDestroyed()) event.sender.send('clip:backgroundReframe', state)
-      })
-      return analysed
-    } catch (err) {
-      if (controller.signal.aborted) throw new Error(ANALYSIS_CANCELLED_MESSAGE, { cause: err })
-      throw err
-    } finally {
-      runningAnalyses.delete(projectId)
-    }
+    const analysed = await runAnalysis(projectId, options, (p) => {
+      if (!event.sender.isDestroyed()) event.sender.send('pipeline:progress', p)
+    })
+    // Show the clips now; the top clips' layouts finish in the background.
+    void startBackgroundReframes(analysed, (state) => {
+      if (!event.sender.isDestroyed()) event.sender.send('clip:backgroundReframe', state)
+    })
+    return analysed
   })
 
   handle(
@@ -187,7 +247,8 @@ export function registerIpcHandlers(): void {
   })
 
   handle('project:updateClip', async (_e, projectId: string, clip: Clip) => {
-    return updateProject(projectId, (project) => {
+    let edited: Clip | null = null
+    const updated = await updateProject(projectId, (project) => {
       const idx = project.clips.findIndex((c) => c.id === clip.id)
       if (idx === -1) throw new Error('Clip not found')
       const saved = project.clips[idx]
@@ -195,7 +256,10 @@ export function registerIpcHandlers(): void {
       // landed on disk. The analysis result belongs to main: keep it rather
       // than letting the stale copy erase the focus track.
       project.clips[idx] = mergeClipSave(clip, saved, project.videoType)
+      if (isLearningEdit(saved, project.clips[idx])) edited = project.clips[idx]
     })
+    if (edited) learn(projectId, edited, 'edited')
+    return updated
   })
 
   handle('clip:ensureReframe', async (_e, projectId: string, clipId: string, retryLayout?: boolean) => {
@@ -211,7 +275,8 @@ export function registerIpcHandlers(): void {
   handle(
     'project:updateTranscriptWord',
     async (_e, projectId: string, segmentId: number, wordIndex: number, text: string) => {
-      return updateProject(projectId, (project) => {
+      let touched: Clip[] = []
+      const updated = await updateProject(projectId, (project) => {
         const segment = project.transcript?.segments.find((s) => s.id === segmentId)
         const word = segment?.words[wordIndex]
         if (!segment || !word) throw new Error('Transcript word not found')
@@ -221,7 +286,12 @@ export function registerIpcHandlers(): void {
           .map((w) => w.text)
           .filter((t) => t.length > 0)
           .join(' ')
+        // A caption fix is an edit of every clip that shows the word.
+        const mid = (word.start + word.end) / 2
+        touched = project.clips.filter((c) => mid >= c.edit.start && mid <= c.edit.end)
       })
+      for (const clip of touched) learn(projectId, clip, 'edited')
+      return updated
     }
   )
 
@@ -302,6 +372,7 @@ export function registerIpcHandlers(): void {
           }
         }
       })
+      learn(projectId, clip, 'exported')
       return {
         clipId: clip.id,
         outputPath: rendered.outputPath,
@@ -324,6 +395,42 @@ export function registerIpcHandlers(): void {
       runningExports.delete(clip.id)
     }
   })
+
+  handle('clip:exportEdit', async (_e, projectId: string, opts: NleExportOptions) => {
+    const project = await loadProject(projectId)
+    const clip = project.clips.find((c) => c.id === opts.clipId)
+    if (!clip) throw new Error('Clip not found')
+    if (project.sourceMissing) {
+      throw new Error(`The source video is missing (${project.video.path}). Relink it to export.`)
+    }
+    const result = await exportClipEdit(project, clip, opts.format, opts.outputDir)
+    learn(projectId, clip, 'exported')
+    return result
+  })
+
+  handle('personalisation:get', () => getPersonalisationSummary())
+  handle('personalisation:setEnabled', (_e, enabled: boolean) => setPersonalisationEnabled(enabled === true))
+  handle('personalisation:reset', () => resetPersonalisation())
+
+  handle('batch:state', async () => {
+    const queue = getBatchQueue()
+    await queue.load()
+    return queue.state()
+  })
+  handle('batch:add', async (_e, sources: BatchItemSource[], options: AnalyzeOptions) => {
+    const valid = (Array.isArray(sources) ? sources : []).filter((source) =>
+      (source?.kind === 'file' && typeof source.path === 'string' && isVideoFile(source.path)) ||
+      (source?.kind === 'url' && typeof source.url === 'string' && /^https?:\/\/\S+$/.test(source.url.trim())))
+      .map((source): BatchItemSource => source.kind === 'url' ? { kind: 'url', url: source.url.trim() } : source)
+    if (!valid.length) throw new Error('Nothing to add: choose video files or paste http(s) links.')
+    return getBatchQueue().add(valid, options)
+  })
+  handle('batch:start', () => getBatchQueue().start())
+  handle('batch:pause', () => getBatchQueue().pause())
+  handle('batch:cancel', (_e, id: string) => getBatchQueue().cancel(id))
+  handle('batch:remove', (_e, id: string) => getBatchQueue().remove(id))
+  handle('batch:retry', (_e, id: string) => getBatchQueue().retry(id))
+  handle('batch:clearFinished', () => getBatchQueue().clearFinished())
 
   handle('clip:cancelExport', async (_e, clipId: string) => {
     runningExports.get(clipId)?.abort()

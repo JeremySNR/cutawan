@@ -34,6 +34,7 @@ import { editorialAssessmentCurrent } from '@shared/editorialRanking'
 import TranscriptEditor from './TranscriptEditor'
 import { ExportButton } from './ClipsScreen'
 import SizeTargetControls from './SizeTargetControls'
+import EditExportMenu from './EditExportMenu'
 import { CAPTION_STYLES, resolveCaptionStyle } from '@shared/captionStyles'
 import { formatBytes, formatTimecode } from '../lib/format'
 import type { AspectRatio, BrollItem, BrollMode, Clip, FramingMode, ReframeMode } from '@shared/types'
@@ -629,6 +630,7 @@ export default function EditorScreen(): React.JSX.Element {
           {entry?.status === 'error' && entry.error && (
             <p className="mt-2 text-[11px] leading-relaxed text-red-400">{entry.error}</p>
           )}
+          <EditExportMenu clipId={clip.id} />
         </div>
       </aside>
     </div>

@@ -36,6 +36,7 @@ import {
 } from './ytdlp'
 import { getAnalysisCredential, getImportPreferences, getModelPreferences, missingCredentialName } from '../settings'
 import { projectDir, saveProject, updateProject } from '../projects'
+import { personaliseClips, recordGeneratedClips } from '../personalisation'
 
 export async function createProject(videoPath: string): Promise<Project> {
   const video = await probeVideo(videoPath)
@@ -220,6 +221,9 @@ export async function analyzeProject(
       { cacheDir: join(projectDir(project.id), 'outline-cache'), providerCacheKey: settings.analysisProviderKey }
     )) : []
     for (const clip of clips) clip.discovery = { origin: 'transcript' }
+    // A small re-ranking from the user's own exports and edits, when there is
+    // enough of it (see shared/personalisation.ts). Scores move; parts do not.
+    const personalisedFrom = clips.length ? await personaliseClips(clips) : null
     clips.push(...visualClips)
     if (clips.length === 0) {
       throw new Error(discovery?.status === 'failed'
@@ -307,6 +311,8 @@ export async function analyzeProject(
       p.prompt = options.prompt
       p.videoType = options.videoType
       p.clipsGenerationId = generationId
+      if (personalisedFrom !== null) p.personalised = { generationId, positives: personalisedFrom }
+      else delete p.personalised
       p.rankingEnabled = options.editorialRanking === true
       if (!p.rankingEnabled) delete p.editorialRanking
     })
@@ -374,6 +380,8 @@ export async function analyzeProject(
         return result ? { ...current, thumbnailPath: result.thumbnailPath } : current
       })
     })
+    // Every clip of the run, so later exports and edits have something to compare against.
+    void recordGeneratedClips(project.id, persisted.clips).catch((err) => console.error('Could not record clips:', err))
     onProgress({ stage: 'done', progress: 1, message: 'Done' })
     return persisted
   } finally {
