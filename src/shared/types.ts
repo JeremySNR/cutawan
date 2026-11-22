@@ -142,6 +142,23 @@ export interface ClipEditState {
   /** Font family overriding the style's font (a custom uploaded font); null/absent = style default. */
   captionFontFamily?: string | null
   showTitle: boolean
+  /** Look of the hook title card; absent = 'card'. */
+  titleStyle?: TitleStyleId
+  /** Mark the clip's key words in the captions (bigger, accent colour). Absent = on. */
+  emphasis?: boolean
+  /** Draw a small emoji after some emphasised words. Absent = off. */
+  emoji?: boolean
+  /**
+   * Replay the clip's strongest short line at the very start, then play the
+   * clip from its beginning (see shared/coldOpen.ts). Absent = off.
+   */
+  coldOpen?: boolean
+  /** Synthesised sound effects at joins, the cold-open seam and the title. Absent = off. */
+  soundEffects?: boolean
+  /** Background music from the music folder in Settings, ducked under speech. Absent = off. */
+  music?: boolean
+  /** File name of the chosen track inside the music folder; absent = picked automatically. */
+  musicTrack?: string | null
   /** Trim overrides (absolute seconds in the source video). */
   start: number
   end: number
@@ -273,7 +290,46 @@ export interface Clip {
   contentType?: ClipContentType | null
   /** AI-suggested image inserts timed to spoken keywords. */
   broll: BrollItem[]
+  /**
+   * Key words to emphasise in the captions, chosen by the visual review.
+   * Absent means the deterministic heuristic picks them (shared/captionEmphasis.ts).
+   */
+  emphasis?: CaptionEmphasis
+  /** Where faces and burned-in text sit in the source, so captions can stay clear. */
+  captionSafety?: CaptionSafety
   edit: ClipEditState
+}
+
+/** Hook title looks, shared by the preview and the burned-in ASS. */
+export type TitleStyleId = 'card' | 'bold' | 'banner'
+
+export interface CaptionEmphasisWord {
+  /** One spoken word, as transcribed (matched case- and punctuation-insensitively). */
+  text: string
+  /** Optional emoji from the bundled set (CAPTION_EMOJI) drawn after the word. */
+  emoji?: string
+}
+
+export interface CaptionEmphasis {
+  source: 'ai'
+  words: CaptionEmphasisWord[]
+}
+
+/** A face's vertical extent over a stretch of source time (normalised source y). */
+export interface FaceBand { start: number; end: number; top: number; bottom: number }
+
+export interface CaptionSafety {
+  version: number
+  /** The source span the measurement covers. */
+  start: number
+  end: number
+  /** The tracked speaker's face over time; empty when no faces were tracked. */
+  faces: FaceBand[]
+  /**
+   * A band of persistent burned-in text (subtitles, a ticker) in the lower
+   * part of the source frame, normalised source y; null when none was seen.
+   */
+  textBand: { top: number; bottom: number } | null
 }
 
 /** Normalized source rectangle; fit it intact instead of discarding its edges. */
@@ -623,6 +679,8 @@ export interface AppSettings {
   importCookiesBrowser: BrowserCookieSource
   /** True when a Netscape cookies.txt file is stored for URL imports. */
   hasImportCookiesFile: boolean
+  /** Folder background music is picked from; null when none was chosen. */
+  musicFolder: string | null
 }
 
 export interface SettingsUpdate {
@@ -646,6 +704,8 @@ export interface SettingsUpdate {
   brandVoice?: Partial<BrandVoiceSettings>
   importCookiesBrowser?: BrowserCookieSource
   clearImportCookiesFile?: boolean
+  /** Background music folder; null clears it. */
+  musicFolder?: string | null
 }
 
 export interface PipelineError {

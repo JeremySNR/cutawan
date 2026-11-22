@@ -244,6 +244,7 @@ export async function analyzeProject(
         clip.viralityScore = ensembleScore(clip.viralityScore, visual.visualScore)
         clip.visualSummary = visual.visualSummary
         clip.visualLayout = visual.visualLayout
+        if (visual.emphasis) clip.emphasis = visual.emphasis
       }
       scored++
       onProgress({

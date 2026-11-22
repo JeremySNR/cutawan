@@ -28,6 +28,11 @@ export interface CaptionStyle {
   positionY: number
   /** Max words shown per caption group. */
   wordsPerGroup: number
+  /**
+   * Colour of an emphasised key word, for styles whose highlight colour is the
+   * text colour (so the highlight alone would not mark it). Absent = highlight.
+   */
+  emphasisColor?: string
 }
 
 export const CAPTION_STYLES: CaptionStyle[] = [
@@ -93,7 +98,8 @@ export const CAPTION_STYLES: CaptionStyle[] = [
     shadow: 0,
     bold: false,
     positionY: 0.8,
-    wordsPerGroup: 6
+    wordsPerGroup: 6,
+    emphasisColor: '#FDE047'
   },
   {
     id: 'hormozi',
@@ -268,6 +274,18 @@ export function resolveCaptionStyle(
     style = { ...style, outlineColor: brandColors.outlineColor }
   }
   return style
+}
+
+/**
+ * How an emphasised key word is drawn, shared by the ASS and the preview: the
+ * style's highlight treatment (its colour, and its box on box styles) at
+ * EMPHASIS_SCALE. Styles whose highlight is plain text colour use their
+ * second colour instead, so the word still stands out.
+ */
+export function captionEmphasisLook(style: CaptionStyle): { color: string; boxColor: string | null } {
+  if (style.highlightBoxColor) return { color: style.highlightColor, boxColor: style.highlightBoxColor }
+  const same = style.highlightColor.toLowerCase() === style.textColor.toLowerCase()
+  return { color: same ? style.emphasisColor ?? '#FDE047' : style.highlightColor, boxColor: null }
 }
 
 /** Convert "#RRGGBB" to an rgba() string for CSS previews. */

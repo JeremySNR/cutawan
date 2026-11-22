@@ -82,11 +82,16 @@ describe('buildAss', () => {
     expect(ass).toContain('The Hook')
   })
 
-  it('leaves the hook title free to wrap inside its margins', () => {
+  it('breaks the hook title into balanced lines itself, inside the top safe area', () => {
     const ass = buildAss(transcript, { ...base, title: 'A long hook that must wrap onto two lines' })
     const title = ass.split('\n').find((l) => l.startsWith('Dialogue: 1,'))!
-    expect(title).not.toContain('\\q2')
-    expect(title).not.toContain('\\N')
+    // The shared title planner decided the lines; libass must not re-wrap them.
+    expect(title).toContain('\\q2')
+    const lines = title.slice(title.indexOf('}') + 1).split('\\N')
+    expect(lines.length).toBe(2)
+    expect(Math.abs(lines[0].length - lines[1].length)).toBeLessThanOrEqual(8)
+    // Anchored top-centre at 10.5% of a 9:16 frame.
+    expect(title).toContain('\\an8\\q2\\pos(540,202)')
   })
 
   it('escapes ASS control characters in words', () => {

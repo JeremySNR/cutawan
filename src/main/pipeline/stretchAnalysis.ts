@@ -29,6 +29,7 @@ export function mergeStretchAnalyses(parts: ClipFocusAnalysis[], stretches: Time
     sceneCuts: [...new Set([...all((part) => part.sceneCuts), ...joins])].sort((a, b) => a - b),
     sceneTransitions: all((part) => part.sceneTransitions),
     lowDetailShots: all((part) => part.lowDetailShots),
-    speakerSplits: all((part) => part.speakerSplits)
+    speakerSplits: all((part) => part.speakerSplits),
+    faceBands: all((part) => part.faceBands)
   }
 }
