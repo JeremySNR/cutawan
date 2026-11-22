@@ -63,12 +63,19 @@ function harness(overrides: Partial<BatchDeps> = {}): Harness {
   return { queue, calls, states, gates, file }
 }
 
-async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
+/**
+ * Wait for a state the queue reaches asynchronously. The deadline is in
+ * time, not polls, and generous: in a full test run the real-export suites
+ * load every core, and a one-second budget was not always enough for the
+ * queue's next step to be scheduled. A state that never arrives still fails.
+ */
+async function until(check: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!check() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
   expect(check()).toBe(true)
 }
 
-describe('batch queue', () => {
+describe('batch queue', { timeout: 30_000 }, () => {
   it('runs items one at a time, in order, with each item\'s settings snapshot', async () => {
     const h = harness()
     await h.queue.add([{ kind: 'file', path: '/a.mp4' }, { kind: 'url', url: 'https://example.com/v' }], OPTIONS)
