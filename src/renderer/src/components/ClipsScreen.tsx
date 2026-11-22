@@ -9,7 +9,9 @@ import {
   FolderOpen,
   FolderCog,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
+  Wrench,
   X
 } from 'lucide-react'
 import { useStore } from '../store'
@@ -18,7 +20,8 @@ import { EditorialExplanation, EditorialRankingSummary, EditorialScore } from '.
 import MissingSourceBanner from './MissingSourceBanner'
 import DiscoverySummary from './DiscoverySummary'
 import { JoinedBadge } from './JoinedMoments'
-import type { Clip, TimeRange } from '@shared/types'
+import type { Clip, ExportCheckReport, TimeRange } from '@shared/types'
+import { exportCheckSummary } from '@shared/exportCheck'
 import { selectedRanges } from '@shared/clipSegments'
 import { findWholeVideoClip, highlightClips } from '@shared/wholeVideo'
 import { editedClipDuration } from '@shared/tighten'
@@ -256,6 +259,7 @@ function ClipCard({ clip, rank }: { clip: Clip; rank: number }): React.JSX.Eleme
             error={entry?.error}
             bytes={entry?.bytes}
             downscaled={entry?.downscaled}
+            check={entry?.check}
             onExport={() => void exportClip(clip.id)}
             onCancel={() => void cancelExport(clip.id)}
           />
@@ -311,6 +315,33 @@ function HoverPreview({ src, ranges, onFailed }: {
   )
 }
 
+/**
+ * What the check after export found: "Checked", "1 issue" or "Fixed 1",
+ * with every finding in the tooltip. Absent for exports made before the
+ * check existed.
+ */
+export function ExportCheckBadge({ check }: { check?: ExportCheckReport }): React.JSX.Element | null {
+  const summary = exportCheckSummary(check)
+  if (!summary) return null
+  const tone = summary.issues
+    ? 'bg-amber-500/15 text-amber-300'
+    : summary.repaired
+      ? 'bg-sky-500/15 text-sky-300'
+      : check?.status === 'skipped'
+        ? 'bg-surface-800 text-zinc-400'
+        : 'bg-emerald-500/10 text-emerald-300/90'
+  const Icon = summary.issues ? AlertTriangle : summary.repaired ? Wrench : ShieldCheck
+  return (
+    <span
+      data-testid="export-check"
+      title={summary.detail}
+      className={`flex shrink-0 cursor-default items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-medium ${tone}`}
+    >
+      <Icon size={12} /> {summary.label}
+    </span>
+  )
+}
+
 export function ExportButton({
   status,
   progress,
@@ -318,6 +349,7 @@ export function ExportButton({
   error,
   bytes,
   downscaled,
+  check,
   onExport,
   onCancel
 }: {
@@ -327,6 +359,8 @@ export function ExportButton({
   error?: string
   bytes?: number
   downscaled?: boolean
+  /** The check after the render, shown as a small badge with the details on hover. */
+  check?: ExportCheckReport
   onExport: () => void
   onCancel: () => void
 }): React.JSX.Element {
@@ -352,18 +386,21 @@ export function ExportButton({
   if (status === 'done' && outputPath) {
     const sizeLabel = bytes !== undefined ? ` · ${formatBytes(bytes)}` : ''
     return (
-      <button
-        onClick={() => void window.cutawan.showItemInFolder(outputPath)}
-        className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-xs font-medium text-emerald-400 transition hover:bg-emerald-500/25"
-        title={
-          downscaled
-            ? `${outputPath} — scaled down to fit the size limit`
-            : outputPath
-        }
-      >
-        <Check size={13} /> Saved{sizeLabel}
-        <FolderOpen size={13} />
-      </button>
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+        <button
+          onClick={() => void window.cutawan.showItemInFolder(outputPath)}
+          className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-2 text-xs font-medium text-emerald-400 transition hover:bg-emerald-500/25"
+          title={
+            downscaled
+              ? `${outputPath} — scaled down to fit the size limit`
+              : outputPath
+          }
+        >
+          <Check size={13} /> Saved{sizeLabel}
+          <FolderOpen size={13} />
+        </button>
+        <ExportCheckBadge check={check} />
+      </div>
     )
   }
   if (status === 'error') {

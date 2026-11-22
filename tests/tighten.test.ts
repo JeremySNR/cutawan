@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { computeKeptSegments, remapTranscript, TimeMap } from '@shared/tighten'
+import { computeKeptSegments, isFiller, remapTranscript, retakeRanges, settleSegments, TimeMap } from '@shared/tighten'
+import type { TimeRange, Transcript } from '@shared/types'
 import { makeTranscript } from './helpers'
 
 describe('computeKeptSegments', () => {
@@ -129,6 +130,87 @@ describe('computeKeptSegments', () => {
     const kept = computeKeptSegments(transcript, 0, last)
     expect(kept).not.toBeNull()
     expect(kept!.length).toBe(2)
+  })
+})
+
+/** Deterministic pseudo-random numbers (mulberry32), so a failure reproduces. */
+function random(seed: number): () => number {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/**
+ * Word timings built to provoke fragments: bursts of very short words, gaps
+ * straddling every threshold, fillers, voice activity that disagrees with
+ * the words, and protected stretches landing anywhere.
+ */
+function adversarial(seed: number): { transcript: Transcript; end: number; protectedRanges: TimeRange[] } {
+  const next = random(seed)
+  const pick = <T,>(items: T[]): T => items[Math.floor(next() * items.length)]
+  const words: Transcript['segments'][number]['words'] = []
+  let t = next() * 0.5
+  for (let i = 0; i < 60; i++) {
+    const length = pick([0.02, 0.05, 0.1, 0.2, 0.35, 0.6])
+    // A small vocabulary, so false starts and repeated takes turn up too.
+    words.push({ text: next() < 0.2 ? pick(['um', 'uh', 'erm']) : pick(['so', 'the', 'reason', 'we', 'did', 'it', 'sorry', 'so—']), start: t, end: t + length })
+    t += length + pick([0.01, 0.1, 0.3, 0.34, 0.36, 0.5, 0.53, 0.7, 0.9, 1.2, 1.5, 1.6, 2.5])
+  }
+  const end = t + next()
+  const speech: TimeRange[] = []
+  for (let s = 0; s < end;) {
+    const length = 0.1 + next() * 2
+    speech.push({ start: s, end: Math.min(end, s + length) })
+    s += length + 0.05 + next() * 0.6
+  }
+  const protectedRanges = Array.from({ length: Math.floor(next() * 3) }, () => {
+    const start = next() * end
+    return { start, end: start + 0.05 + next() * 1.5 }
+  })
+  return {
+    transcript: { language: 'en', durationSec: end, speech, segments: [{ id: 0, text: '', start: 0, end, words }] },
+    end, protectedRanges
+  }
+}
+
+describe('settleSegments', () => {
+  it('fills hairline cuts and drops slivers until nothing changes', () => {
+    expect(settleSegments([
+      { start: 0, end: 2 }, { start: 2.1, end: 2.2 }, { start: 2.3, end: 4 }, { start: 5, end: 5.1 }, { start: 6, end: 8 }
+    ])).toEqual([{ start: 0, end: 4 }, { start: 6, end: 8 }])
+  })
+
+  it('never fills a hard removal, and keeps protected slivers', () => {
+    const out = settleSegments([{ start: 0, end: 2 }, { start: 2.2, end: 2.3 }, { start: 3, end: 4 }], {
+      hard: [{ start: 2, end: 2.2 }], keep: s => s.start === 2.2
+    })
+    expect(out).toEqual([{ start: 0, end: 2 }, { start: 2.2, end: 2.3 }, { start: 3, end: 4 }])
+  })
+
+  it('leaves no fragment whatever the word timings', () => {
+    let withRetakes = 0
+    for (let seed = 1; seed <= 300; seed++) {
+      const { transcript, end, protectedRanges } = adversarial(seed)
+      const kept = computeKeptSegments(transcript, 0, end, protectedRanges)
+      if (!kept) continue
+      const fillers = transcript.segments[0].words.filter(w => isFiller(w.text))
+      const retakes = retakeRanges(transcript, 0, end)
+      if (retakes.length) withRetakes++
+      const isProtected = (r: TimeRange): boolean => protectedRanges.some(p => p.start < r.end && p.end > r.start)
+      for (let i = 0; i < kept.length; i++) {
+        const piece = kept[i]
+        expect(piece.end, `seed ${seed}`).toBeGreaterThan(piece.start)
+        if (!isProtected(piece)) expect(piece.end - piece.start, `seed ${seed} piece ${i}`).toBeGreaterThanOrEqual(0.25 - 1e-9)
+        if (i === 0) continue
+        const gap = { start: kept[i - 1].end, end: piece.start }
+        const hard = [...fillers, ...retakes].some(f => f.start < gap.end && f.end > gap.start)
+        if (!hard) expect(gap.end - gap.start, `seed ${seed} gap ${i}`).toBeGreaterThanOrEqual(0.35 - 1e-9)
+      }
+    }
+    expect(withRetakes).toBeGreaterThan(30)
   })
 })
 

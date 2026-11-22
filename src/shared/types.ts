@@ -568,6 +568,31 @@ export interface ExportResult {
    * file stays under the cap; compare `bytes` to `sizeTargetBytes`.
    */
   overBudget?: boolean
+  /** What the check after the render found and repaired (main/pipeline/exportCheck.ts). */
+  check?: ExportCheckReport
+}
+
+/** One thing the post-export check noticed. Times are seconds into the exported file. */
+export interface ExportCheckFinding {
+  kind: 'black' | 'freeze' | 'silence-start' | 'silence-end' | 'loudness' | 'true-peak' | 'mid-word'
+  /** One plain sentence for the person exporting. */
+  message: string
+  at?: number
+  duration?: number
+  /** Fixed in the saved file; reported so the change is not a surprise. */
+  repaired?: boolean
+}
+
+export interface ExportCheckReport {
+  /** 'skipped' when the check could not run (it never fails an export). */
+  status: 'checked' | 'skipped'
+  findings: ExportCheckFinding[]
+  /** Wall-clock seconds the check and any repair added to the export. */
+  seconds: number
+  /** Measured on the saved file. */
+  loudness?: { integratedLufs: number; truePeakDb: number }
+  /** Why the check was skipped. */
+  note?: string
 }
 
 export type EncoderPreference = 'auto' | 'cpu' | 'gpu'

@@ -610,6 +610,7 @@ export default function EditorScreen(): React.JSX.Element {
               error={entry?.error}
               bytes={entry?.bytes}
               downscaled={entry?.downscaled}
+              check={entry?.check}
               onExport={() => void exportClip(clip.id)}
               onCancel={() => void cancelExport(clip.id)}
             />
@@ -632,6 +633,11 @@ export default function EditorScreen(): React.JSX.Element {
               {entry.sizeTargetBytes ? ` (${formatBytes(entry.sizeTargetBytes)})` : ''}. Shorten the
               clip or raise the cap.
             </p>
+          )}
+          {entry?.status === 'done' && entry.check?.findings.some(f => !f.repaired) && (
+            <ul data-testid="export-check-issues" className="mt-2 space-y-0.5 text-[11px] leading-relaxed text-amber-400">
+              {entry.check.findings.filter(f => !f.repaired).map((f, i) => <li key={i}>{f.message}</li>)}
+            </ul>
           )}
           {entry?.status === 'error' && entry.error && (
             <p className="mt-2 text-[11px] leading-relaxed text-red-400">{entry.error}</p>
