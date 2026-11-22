@@ -6,7 +6,7 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
-## [Unreleased]
+## [0.15.0] - 2026-11-22
 
 The biggest update to how Cutawan finds and cuts clips since the first release: better picks from long videos, clips that can join separate moments, smoother cuts, and scores you can read.
 
