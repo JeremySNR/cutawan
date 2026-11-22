@@ -192,6 +192,11 @@ export function missingCredentialName(): string {
   return load().subscription.provider === 'openrouter' ? 'OpenRouter key' : 'OpenAI API key'
 }
 
+/** The selected AI route. */
+export function getAiProvider(): AppSettings['subscription']['provider'] {
+  return load().subscription.provider
+}
+
 /** Credential for analysis (and hosted transcription) on the selected provider. */
 export function getAnalysisCredential(): string {
   const provider = load().subscription.provider

@@ -20,6 +20,7 @@ import type {
   UpdateDownloadState
 } from '@shared/types'
 import type { OpenRouterCatalog } from '@shared/openrouter'
+import type { DubEstimate } from '@shared/dubPlan'
 
 const api = {
   checkSubscriptionSetup: (): Promise<{ message: string; requestsToday: number }> => ipcRenderer.invoke('settings:checkSubscription'),
@@ -69,6 +70,19 @@ const api = {
   cancelExport: (clipId: string): Promise<void> => ipcRenderer.invoke('clip:cancelExport', clipId),
   generateCaption: (projectId: string, clipId: string): Promise<Project> =>
     ipcRenderer.invoke('clip:generateCaption', projectId, clipId),
+  translateCaptions: (projectId: string, clipId: string, options: { language: string; doNotTranslate?: string[] }): Promise<Project> =>
+    ipcRenderer.invoke('clip:translate', projectId, clipId, options),
+  estimateDub: (projectId: string, clipId: string, choice: { model: string; voice: string }): Promise<DubEstimate> =>
+    ipcRenderer.invoke('clip:dubEstimate', projectId, clipId, choice),
+  dubClip: (projectId: string, clipId: string, choice: { model: string; voice: string }): Promise<Project> =>
+    ipcRenderer.invoke('clip:dub', projectId, clipId, choice),
+  onDubProgress: (cb: (p: { clipId: string; done: number; total: number }) => void): (() => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, p: { clipId: string; done: number; total: number }): void => cb(p)
+    ipcRenderer.on('dub:progress', listener)
+    return () => ipcRenderer.removeListener('dub:progress', listener)
+  },
+  /** The real OS, for choosing caption fallback fonts the export will also use. */
+  osPlatform: process.platform as string,
 
   getTimeline: (videoPath: string, startSec: number, endSec: number): Promise<TimelineData> =>
     ipcRenderer.invoke('video:timeline', videoPath, startSec, endSec),

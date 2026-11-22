@@ -142,6 +142,12 @@ export interface ClipEditState {
   /** Font family overriding the style's font (a custom uploaded font); null/absent = style default. */
   captionFontFamily?: string | null
   showTitle: boolean
+  /**
+   * Which captions burn in once the clip has an accepted translation
+   * (`Clip.translation`): the original transcript, the translation, or both
+   * (translation under the original, smaller). Absent means original.
+   */
+  captionLanguage?: CaptionLanguageMode
   /** Trim overrides (absolute seconds in the source video). */
   start: number
   end: number
@@ -273,6 +279,10 @@ export interface Clip {
   contentType?: ClipContentType | null
   /** AI-suggested image inserts timed to spoken keywords. */
   broll: BrollItem[]
+  /** AI caption translation, reviewed in the editor before use. */
+  translation?: ClipTranslation
+  /** AI voice dub of the accepted translation. */
+  dub?: ClipDub
   edit: ClipEditState
 }
 
@@ -665,4 +675,71 @@ export interface TimelineData {
   frames: string[]
   /** Normalised 0..1 RMS per bucket across the window (empty when no audio). */
   waveform: number[]
+}
+
+/** See `ClipEditState.captionLanguage`. */
+export type CaptionLanguageMode = 'original' | 'translated' | 'both'
+
+/**
+ * One translated sentence. `start`/`end` span the source sentence's played
+ * words (absolute source seconds): the translation plays in that slot.
+ */
+export interface TranslationLine {
+  start: number
+  end: number
+  /** The original sentence as it was sent (only the words that played). */
+  source: string
+  /** The translation (or the original, when the model skipped the line). */
+  text: string
+  /** The model returned nothing usable for this line; `text` is the original. */
+  untranslated?: boolean
+  /** The user changed `text` in the review panel. */
+  edited?: boolean
+  /** Protected terms or numbers from the source that `text` lost. */
+  warnings?: string[]
+}
+
+export interface ClipTranslation {
+  version: 1
+  /** Target language as the user chose or typed it, e.g. "Spanish". */
+  language: string
+  /** BCP-47 code when the language came from the list (e.g. "es"). */
+  languageCode?: string
+  /** Terms the creator asked to keep unchanged. */
+  doNotTranslate?: string[]
+  lines: TranslationLine[]
+  /** True once any line was edited by hand. */
+  edited: boolean
+  /** Reviewed and accepted in the editor; until then it is not displayed. */
+  accepted: boolean
+  createdAt: number
+}
+
+/** How a synthesised line was made to fit its slot. */
+export type DubFit = 'natural' | 'faster' | 'stretched' | 'truncated'
+
+export interface DubLine {
+  /** Source slot of the translation line it voices (absolute seconds). */
+  start: number
+  end: number
+  /** The text synthesised; a later edit to the line makes it stale. */
+  text: string
+  /** Cached synthesised audio in the project folder. */
+  audioPath: string
+  /** Length of the synthesised audio at normal tempo, in seconds. */
+  audioSec: number
+  /** Tempo applied on playback and export (1 = none, at most DUB_MAX_TEMPO). */
+  tempo: number
+  fit: DubFit
+}
+
+export interface ClipDub {
+  version: 1
+  provider: 'openai' | 'openrouter'
+  model: string
+  voice: string
+  /** Mix the dub into the preview and the export. */
+  enabled: boolean
+  lines: DubLine[]
+  createdAt: number
 }

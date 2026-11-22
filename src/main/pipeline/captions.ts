@@ -13,6 +13,8 @@ import {
   wordsInRange,
   type WordGroup
 } from '@shared/captionLayout'
+import type { TranslatedCaptionPlan } from '@shared/captionTranslation'
+import { buildTranslatedAssEvents } from './translatedCaptions'
 
 /**
  * Bundled caption fonts (Anton, Poppins — OFL licensed) so exports render
@@ -147,6 +149,8 @@ export interface CaptionOptions {
   brandColors?: BrandColors | null
   /** Source-time layout bands that keep captions clear of enlarged detail. */
   positionRanges?: CaptionPositionRange[]
+  /** Translated captions to draw (translatedCaptions.ts); absent = original only. */
+  translation?: TranslatedCaptionPlan | null
 }
 
 export function buildAss(transcript: Transcript, opts: CaptionOptions): string {
@@ -208,7 +212,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     )
   }
 
-  const words = wordsInRange(transcript, opts.clipStart, opts.clipEnd)
+  const words = opts.translation?.mode === 'translated' ? [] : wordsInRange(transcript, opts.clipStart, opts.clipEnd)
   const groups = groupWords(words, captionLayoutBudget(style, opts.width / opts.height))
   // \q2 turns libass wrapping off for caption events only: the layout above
   // decided their lines. The hook title keeps the script's smart wrapping
@@ -235,6 +239,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       }
     }
   })
+
+  if (opts.translation) {
+    lines.push(...buildTranslatedAssEvents(opts.translation, {
+      style, width: opts.width, height: opts.height, clipStart: opts.clipStart, positionRanges: opts.positionRanges,
+      fontSize: (emPx, styleFont) => assFontSize(emPx, styleFont ? opts.fontMetrics ?? null : null)
+    }))
+  }
 
   return header + lines.join('\n') + '\n'
 }
