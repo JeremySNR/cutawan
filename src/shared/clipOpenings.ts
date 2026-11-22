@@ -162,3 +162,51 @@ export function reviewOpening(lines: OpeningLine[], limits: OpeningLimits): Open
   while (first < lines.length && first < skip + maxSkipCount && isLeadInFragment(lines[first].text)) first++
   return { skip, dangling: first < lines.length ? danglingOpener(lines[first].text) : null }
 }
+
+/** Most seconds an opening may be moved back to supply what it leans on. */
+export const MAX_REWIND_SEC = 15
+/** Fewest words a line needs before a clip may open on it. */
+export const MIN_REWIND_WORDS = 6
+/** Most sentences an opening may be moved back. */
+export const MAX_REWIND_COUNT = 2
+
+export interface RewindLimits {
+  /** Seconds the clip plays now. */
+  playedSec: number
+  /** Longest the clip may become. */
+  maxPlayedSec: number
+  /** Where the clip opens now (the first word of its first line). */
+  firstLineStart: number
+  /** Earliest the clip may open (e.g. the end of the previous clip's speech is not a limit; the video start is). */
+  earliestStart?: number
+  maxRewindSec?: number
+  maxRewindCount?: number
+}
+
+/**
+ * For a clip whose first line leans backwards ("And then…", "But that's…"),
+ * how many of the lines just before it to take in so it opens on the line it
+ * continues, or 0 when that is not possible. `before` is the lines preceding
+ * the clip, nearest last. The new first line must stand on its own (not
+ * dangle itself, not be a throwaway lead-in), and the clip must stay within
+ * its length cap. The model chose the moment; this only restores the start
+ * of the thought it cut into, which is what a human editor does first.
+ */
+export function rewindOpening(before: OpeningLine[], limits: RewindLimits): number {
+  const maxSec = limits.maxRewindSec ?? MAX_REWIND_SEC
+  const maxCount = limits.maxRewindCount ?? MAX_REWIND_COUNT
+  for (let count = 1; count <= Math.min(maxCount, before.length); count++) {
+    const line = before[before.length - count]
+    const added = limits.firstLineStart - line.start
+    if (added > maxSec || limits.playedSec + added > limits.maxPlayedSec) return 0
+    if (limits.earliestStart !== undefined && line.start < limits.earliestStart) return 0
+    if (isLeadInFragment(line.text)) continue
+    if (danglingOpener(line.text)) continue
+    // A short line before a dangling opener is usually someone's reaction
+    // ("Oh no.", "Delightful, but terrifying."), not the thought it continues;
+    // opening on it is worse than the dangling word. Measured on a live run.
+    if (line.text.trim().split(/\s+/).length < MIN_REWIND_WORDS) return 0
+    return count
+  }
+  return 0
+}

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   detectHighlights,
+  fitJoinedSegments,
   longRangePairings,
   pairingFitsOneWindow,
   pairingLines,
@@ -56,14 +57,14 @@ describe('pairing helpers', () => {
     expect(chosen.map((p) => p.reason)).toEqual(Array.from({ length: 8 }, (_, i) => `far ${i}`))
   })
 
-  it('shows each end with a few lines either side, and no more than thirty of a long range', () => {
+  it('shows each end with a few lines either side, and no more than twelve of a long range', () => {
     expect(pairingLines({ startLine: 100, endLine: 102 }, sentences).map((s) => s.index)).toEqual(
       Array.from({ length: 11 }, (_, i) => 96 + i))
     expect(pairingLines({ startLine: 1, endLine: 2 }, sentences)[0].index).toBe(0)
     expect(pairingLines({ startLine: 897, endLine: 899 }, sentences).at(-1)!.index).toBe(899)
     const long = pairingLines({ startLine: 200, endLine: 400 }, sentences)
     expect(long[0].index).toBe(196)
-    expect(long.at(-1)!.index).toBe(233)
+    expect(long.at(-1)!.index).toBe(215)
   })
 })
 
@@ -179,7 +180,8 @@ describe('detectHighlights joining distant moments (scripted model)', () => {
     expect(proposal.user).toContain('Pairing 0 — the outline\'s reason: "far pair"')
     expect(proposal.user).not.toContain('near pair')
     expect(proposal.user).not.toContain('Pairing 1')
-    expect(proposal.user).toContain(`#96 [${sentences[96].start.toFixed(1)}s - ${sentences[96].end.toFixed(1)}s] ${sentences[96].text}`)
+    // Each line carries its length, so the model can add up a clip's length.
+    expect(proposal.user).toContain(`#96 [${sentences[96].start.toFixed(1)}s - ${sentences[96].end.toFixed(1)}s, ${(sentences[96].end - sentences[96].start).toFixed(1)}s long] ${sentences[96].text}`)
     expect(shownLines(proposal.user)).toEqual([...Array.from({ length: 11 }, (_, i) => 96 + i), ...Array.from({ length: 12 }, (_, i) => 796 + i)])
     // The same selection and joining rules, plus the instruction to decline.
     expect(proposal.system).toContain('Never change what a speaker meant')
@@ -274,20 +276,24 @@ describe('detectHighlights joining distant moments (scripted model)', () => {
   })
 
   it('drops a proposal that does not join both moments, uses lines it was not shown, or names no pairing shown', async () => {
-    const cases: Array<[string, ReturnType<typeof joinedClip>[]]> = [
+    // The last number is how many requests each case makes: one, plus the
+    // single correction when the answer had a fixable problem. An answer for
+    // a pairing that was never shown is not a problem to fix; it is ignored.
+    const cases: Array<[string, ReturnType<typeof joinedClip>[], number]> = [
       // Only the setup, continuous: what the windowed pass already offers.
-      ['setup alone', [joinedClip(0, [[98, 104]], 'setup alone')]],
+      ['setup alone', [joinedClip(0, [[98, 104]], 'setup alone')], 2],
       // Reaches into the thirty minutes between the moments, which it was never shown.
-      ['unshown lines', [joinedClip(0, [[100, 103], [500, 503]], 'unshown lines')]],
-      ['unknown pairing', [joinedClip(3, [[100, 103], [800, 803]], 'unknown pairing')]],
+      ['unshown lines', [joinedClip(0, [[100, 103], [500, 503]], 'unshown lines')], 2],
+      ['unknown pairing', [joinedClip(3, [[100, 103], [800, 803]], 'unknown pairing')], 1],
       // One clip per pairing: a second answer for the same pairing is ignored.
-      ['second answer', [joinedClip(0, [[98, 104]], 'first answer'), joinedClip(0, [[100, 103], [800, 803]], 'second answer')]]
+      ['second answer', [joinedClip(0, [[98, 104]], 'first answer'), joinedClip(0, [[100, 103], [800, 803]], 'second answer')], 2]
     ]
-    for (const [title, reply] of cases) {
+    for (const [title, reply, expected] of cases) {
       requests = []
       answers.long_range_joins = () => ({ clips: reply, declined: [] })
       const clips = await run()
-      expect(count('long_range_joins')).toBe(1)
+      // The scripted model repeats itself, so a correction fixes nothing.
+      expect(count('long_range_joins'), title).toBe(expected)
       expect(clips.some((c) => c.title === title || c.stitch)).toBe(false)
       expect(count('clip_joins')).toBe(0)
     }
@@ -303,5 +309,60 @@ describe('detectHighlights joining distant moments (scripted model)', () => {
     await detectHighlights('key', 'model', short, options, short.durationSec, undefined, undefined, { cacheDir: dir })
     expect(requests.map((r) => r.schema)).toEqual(['viral_clips', 'clip_endings'])
     expect(await readdir(dir)).toEqual([])
+  })
+
+  it('asks once for a corrected join when the first came back too long, and keeps the correction', async () => {
+    let call = 0
+    answers.long_range_joins = () => {
+      call++
+      // First answer takes far too much of each moment; the correction keeps a few lines of each.
+      return call === 1
+        ? { clips: [joinedClip(0, [[96, 106], [796, 807]], 'too long')], declined: [] }
+        : { clips: [joinedClip(0, [[100, 103], [800, 803]], 'tight')], declined: [] }
+    }
+    // Every line shown for both moments is far more than a short clip's 45 seconds.
+    const clips = await run({ clipLength: 'short' })
+    expect(count('long_range_joins')).toBe(2)
+    const repair = requests.filter((r) => r.schema === 'long_range_joins')[1]
+    expect(repair.user).toMatch(/Pairing 0 \("too long"\) runs about \d+ seconds; the limit is 45 seconds\. Do not just trim it to fit/)
+    expect(clips.some((c) => c.title === 'tight' && c.stitch)).toBe(true)
+  })
+
+  it('fits a joined clip that stays too long by dropping whole sentences, last resort only, and still reviews it', async () => {
+    // Both answers take every line shown; on a short clip that is over 45 s each time.
+    answers.long_range_joins = () => ({ clips: [joinedClip(0, [[96, 106], [796, 807]], 'still too long')], declined: [] })
+    const clips = await run({ clipLength: 'short' })
+    expect(count('long_range_joins')).toBe(2)
+    const joined = clips.find((c) => c.title === 'still too long')
+    expect(joined?.stitch).toBeDefined()
+    // It went through the join review like any other joined clip.
+    expect(count('clip_joins')).toBe(1)
+    const parts = selectedRanges(joined!.edit)
+    expect(parts).toHaveLength(2)
+    expect(parts.reduce((sum, p) => sum + p.end - p.start, 0)).toBeLessThanOrEqual(45)
+    // Both openings are kept: the setup from line 96 and the payoff from line 796.
+    expect(parts[0].start).toBeLessThanOrEqual(sentences[96].start)
+    expect(parts[1].start).toBeLessThanOrEqual(sentences[796].start)
+    expect(parts[1].start).toBeGreaterThan(sentences[795].end - 0.5)
+  })
+})
+
+describe('fitJoinedSegments', () => {
+  // Line i plays from 10i to 10i + 8.
+  const lineTime = (i: number) => ({ start: i * 10, end: i * 10 + 8 })
+
+  it('leaves a clip that fits alone', () => {
+    expect(fitJoinedSegments([{ start: 1, end: 2 }, { start: 50, end: 51 }], lineTime, 100)).toEqual([{ start: 1, end: 2 }, { start: 50, end: 51 }])
+  })
+
+  it('trims the first segment first, then the last, keeping each opening line', () => {
+    // 98 s + 58 s against a 60 s cap (57 s after roll): the first segment
+    // goes down to its opening line (8 s), then the last loses one line (48 s).
+    expect(fitJoinedSegments([{ start: 0, end: 9 }, { start: 50, end: 55 }], lineTime, 60)).toEqual([{ start: 0, end: 0 }, { start: 50, end: 54 }])
+  })
+
+  it('gives up when even the opening lines do not fit', () => {
+    expect(fitJoinedSegments([{ start: 0, end: 3 }, { start: 50, end: 53 }], lineTime, 15)).toBeNull()
+    expect(fitJoinedSegments([{ start: 0, end: 3 }], () => undefined, 100)).toBeNull()
   })
 })

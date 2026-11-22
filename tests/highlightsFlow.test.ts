@@ -880,20 +880,32 @@ describe('detectHighlights checking clip openings (scripted model)', () => {
     expect(clip.scoreBreakdown?.hook).toBe(20)
   })
 
-  it('ranks a clip that opens on a dangling "And" lower without dropping it, and says why', async () => {
+  it('opens a clip that starts on a dangling "And" on the line it continues', async () => {
     answers = {
-      viral_clips: () => ({ clips: [raw(6, 10, 'dangling'), { ...raw(3, 5, 'clean'), score_parts: { hook: 18, emotion: 10, value: 10, structure: 10, shareability: 5 } }] }),
+      viral_clips: () => ({ clips: [raw(6, 10, 'dangling')] }),
       clip_endings: () => ({ endings: [] })
     }
-    const clips = await detectHighlights('key', 'model', transcript, options, VIDEO)
-    expect(clips.map((c) => c.title)).toEqual(['clean', 'dangling'])
-    const dangling = clips[1]
-    expect(dangling.scoreBreakdown?.hook).toBe(12)
-    expect(dangling.viralityScore).toBe(47)
-    expect(dangling.viralityReason).toBe('Strong claim. Opens on "And", which leans on something said before the clip.')
+    const [clip] = await detectHighlights('key', 'model', transcript, options, VIDEO)
+    // "The rich do it the other way around." stands on its own, so the clip
+    // opens there, and nothing is docked.
+    expect(clip.suggestedStart).toBeCloseTo(sentences[5].start - 0.25, 5)
+    expect(clip.edit.start).toBe(clip.suggestedStart)
+    expect(clip.viralityScore).toBe(55)
+    expect(clip.viralityReason).toBe('Strong claim.')
+  })
+
+  it('ranks a dangling opening lower, and says why, when the lines before it lean back too', async () => {
+    const leaning = makeTranscript(texts.map((t, i) => i === 4 ? 'And they spend whatever is left after that.' : i === 5 ? 'But the rich do it the other way around.' : t),
+      { wordSec: 0.3, gapSec: 0.1, sentenceGapSec: 0.4 })
+    const lines = transcriptSentences(leaning)
+    answers = { clip_endings: () => ({ endings: [] }) }
+    answers.viral_clips = () => ({ clips: [raw(6, 10, 'dangling')] })
+    const [alone] = await detectHighlights('key', 'model', leaning, options, leaning.durationSec + 5)
+    expect(alone.scoreBreakdown?.hook).toBe(12)
+    expect(alone.viralityScore).toBe(47)
+    expect(alone.viralityReason).toBe('Strong claim. Opens on "And", which leans on something said before the clip.')
     // Its span is untouched.
-    expect(dangling.suggestedStart).toBeCloseTo(sentences[6].start - 0.25, 5)
-    expect(clips[0].viralityReason).toBe('Strong claim.')
+    expect(alone.suggestedStart).toBeCloseTo(lines[6].start - 0.25, 5)
   })
 
   it('does nothing to a transcript that is not in English', async () => {

@@ -9,7 +9,7 @@ import type {
   Transcript
 } from '@shared/types'
 import { SCORE_PARTS, normalizeScoreParts, rescaleScoreParts, scoreFromParts } from '@shared/scoreBreakdown'
-import { isEnglishLanguage, reviewOpening } from '@shared/clipOpenings'
+import { MAX_REWIND_COUNT, isEnglishLanguage, reviewOpening, rewindOpening } from '@shared/clipOpenings'
 import { mapLimit } from './concurrency'
 import { MIN_JOIN_GAP_SEC, mergeNearbyRanges, selectedDuration, selectedRanges } from '@shared/clipSegments'
 import { DEFAULT_CAPTION_STYLE_ID } from '@shared/captionStyles'
@@ -158,6 +158,20 @@ function clipProperties(stitch: boolean): Record<string, unknown> {
  * filler. Platforms rank on completion rate, and padding a tight moment to hit
  * a number is the fastest way to tank it, so we never pad after the fact.
  */
+/**
+ * The length a clip should come back at when it was too long: the middle of
+ * the preference's range, not just under the cap. Told only the cap, a model
+ * trims to a second under it every time, which pads every clip to the limit.
+ */
+function repairLengthBand(pref: ClipLengthPreference): string {
+  switch (pref) {
+    case 'short': return '15 to 30 seconds'
+    case 'medium': return '30 to 60 seconds'
+    case 'long': return '60 to 90 seconds'
+    default: return '30 to 60 seconds'
+  }
+}
+
 function lengthGuidance(pref: ClipLengthPreference): string {
   switch (pref) {
     case 'short':
@@ -211,7 +225,7 @@ function formatTimestamp(sec: number): string {
  * line it was shown or is plainly wrong. The times stay on the line because
  * the model needs them to judge how long a clip runs. Exported for tests.
  */
-export function formatTranscriptForModel(sentences: Sentence[]): string {
+export function formatTranscriptForModel(sentences: Sentence[], opts: { durations?: boolean } = {}): string {
   return sentences
     .map((s) => {
       const delivery =
@@ -222,7 +236,10 @@ export function formatTranscriptForModel(sentences: Sentence[]): string {
             : s.energy <= 0.2
               ? ' [delivery: subdued]'
               : ''
-      return `#${s.index} [${formatTimestamp(s.start)} - ${formatTimestamp(s.end)}] ${s.text}${delivery}`
+      // With durations, a model can add up a clip's length instead of
+      // subtracting timestamps, which it does badly on long videos.
+      const length = opts.durations ? `, ${(s.end - s.start).toFixed(1)}s long` : ''
+      return `#${s.index} [${formatTimestamp(s.start)} - ${formatTimestamp(s.end)}${length}] ${s.text}${delivery}`
     })
     .join('\n')
 }
@@ -935,7 +952,8 @@ function quoteOpener(opener: string): string {
 export function checkClipOpenings(
   transcript: Transcript,
   clips: Clip[],
-  videoDurationSec: number
+  videoDurationSec: number,
+  maxDuration = Infinity
 ): { clips: Clip[]; dangling: Set<string> } {
   const dangling = new Set<string>()
   if (!isEnglishLanguage(transcript.language)) return { clips, dangling }
@@ -965,6 +983,26 @@ export function checkClipOpenings(
         out = { ...out, suggestedStart: start, edit: { ...out.edit, start } }
         if (process.env.CUTAWAN_DEBUG) {
           console.error(`[highlights] opening check skipped ${lines.slice(0, verdict.skip).map((l) => `"${l.text}"`).join(' ')} in "${clip.title}"`)
+        }
+      }
+    }
+    if (verdict.dangling && verdict.skip === 0) {
+      // First try to open on the line it continues: take in up to two lines
+      // before it when they stand on their own and the clip stays in its cap.
+      const firstIndex = lines[0].index
+      const before = sentences.slice(Math.max(0, firstIndex - MAX_REWIND_COUNT), firstIndex)
+      const back = rewindOpening(before, {
+        playedSec: clip.suggestedEnd - clip.suggestedStart - skippedSec(clip),
+        maxPlayedSec: maxDuration,
+        firstLineStart: lines[0].start
+      })
+      if (back > 0) {
+        const start = padSpeechStart(before[before.length - back].start, transcript, START_PRE_ROLL_SEC)
+        if (start < out.suggestedStart) {
+          if (process.env.CUTAWAN_DEBUG) {
+            console.error(`[highlights] opening check moved "${clip.title}" back to "${before[before.length - back].text}" (it opened on "${quoteOpener(verdict.dangling)}")`)
+          }
+          return { ...out, suggestedStart: start, edit: { ...out.edit, start } }
         }
       }
     }
@@ -1217,11 +1255,12 @@ const MAX_LONG_RANGE_PAIRINGS = 8
 /** Lines shown before and after each end of a pairing, so a part can open on the lead-in or run on to the landing. */
 const PAIRING_CONTEXT_LINES = 4
 /**
- * Most lines of one end's own range shown. A clip plays at most 100 seconds,
- * about forty short lines in all, so lines past this are text no joined clip
- * could use.
+ * Most lines of one end's own range shown. A joined clip plays at most 100
+ * seconds across both ends, and a good one far less, so each end needs only
+ * the lines around its point. Showing thirty lines a side invited the model
+ * to take most of them (measured live: a 303 s first answer).
  */
-const PAIRING_RANGE_LINES = 30
+const PAIRING_RANGE_LINES = 12
 
 /**
  * Whether some analysis window holds both ends of a pairing. Such a pairing
@@ -1263,10 +1302,12 @@ export function pairingLines(range: { startLine: number; endLine: number }, sent
  * only explains that the request is about given pairings, and that saying no
  * is a good answer.
  */
+const JOINED_BAND = '30 to 60 seconds'
 const LONG_RANGE_PROMPT = `Joining distant moments:
 - This time you are not choosing clips from a whole transcript. An outline of the video has paired moments that are far apart: a setup and the payoff that comes much later, a question and its answer, a claim and its evidence, the start of a story and its end. For each pairing you are shown the numbered lines around the first moment and the numbered lines around the second.
 - For each pairing, either return ONE clip that joins the two moments or decline the pairing. A clip for a pairing has at least one segment from the first moment's lines and at least one from the second moment's lines (at most ${MAX_SEGMENTS} segments in all), uses only that pairing's lines, and gives the pairing's number in "pairing".
 - Everything between the two moments is skipped, so the rules for joining apply with full force: the second moment must not lean on anything the viewer did not hear.
+- The whole clip — every segment added together — must fit the length limit given below, and a good joined clip is usually ${JOINED_BAND}: take only the few lines of each moment that carry it (the question and the start of the answer that settles it, the setup line and the payoff line), not the whole stretch shown.
 - Decline when the two moments do not make one clip that a viewer with no context would follow, when the payoff only makes sense with what was said in between, or when the lines do not bear out the outline's reason for the pairing. Declining is often the right answer; list each declined pairing with a short reason.`
 
 /** The long-range reply: joined clips in the selection schema, each naming its pairing, and the pairings declined. */
@@ -1334,9 +1375,9 @@ async function proposeLongRangeJoins(
   const blocks = shown.map(({ pairing, setup, payoff }, i) => [
     `Pairing ${i} — the outline's reason: "${pairing.reason || 'none given'}"`,
     `First moment (${pairing.setupLabel}), lines #${setup[0].index} to #${setup[setup.length - 1].index}:`,
-    formatTranscriptForModel(setup),
+    formatTranscriptForModel(setup, { durations: true }),
     `Second moment (${pairing.payoffLabel}), lines #${payoff[0].index} to #${payoff[payoff.length - 1].index}:`,
-    formatTranscriptForModel(payoff)
+    formatTranscriptForModel(payoff, { durations: true })
   ].join('\n'))
   const user = [
     `Video duration: ${videoDurationSec.toFixed(1)} seconds.`,
@@ -1344,7 +1385,7 @@ async function proposeLongRangeJoins(
     options.prompt.trim()
       ? `The creator gave these special instructions, which take priority when choosing moments: "${options.prompt.trim()}"`
       : '',
-    `Return a joined clip or a refusal for each of the ${shown.length} pairings below. Give each segment as the number of the line it opens on ("start_line") and the number of the line it closes on ("end_line"), both included. Lines are prefixed with their line number and [start - end] in seconds from the start of the video.`,
+    `Return a joined clip or a refusal for each of the ${shown.length} pairings below. Give each segment as the number of the line it opens on ("start_line") and the number of the line it closes on ("end_line"), both included. Lines are prefixed with their line number, [start - end] in seconds from the start of the video, and how long the line plays. A clip's length is the sum of the lengths of the lines it plays; add them up before answering.`,
     blocks.join('\n\n')
   ].filter(Boolean).join('\n\n')
 
@@ -1369,32 +1410,117 @@ async function proposeLongRangeJoins(
   }
   if (process.env.CUTAWAN_DEBUG) console.error('[highlights] long-range joins:', JSON.stringify(res, null, 2))
 
-  const clips: Clip[] = []
-  const answered = new Set<number>()
-  for (const raw of Array.isArray(res?.clips) ? res.clips : []) {
-    if (!raw || typeof raw !== 'object') continue
-    const n = parseLineId(raw.pairing)
-    // One clip per pairing, and only for a pairing that was shown.
-    if (n === undefined || Number.isNaN(n) || !shown[n] || answered.has(n)) continue
-    answered.add(n)
-    const { setup, payoff } = shown[n]
-    const landed = landSelection({ clips: [raw] }, {
-      transcript,
-      sentences,
-      shown: new Map([...setup, ...payoff].map((s) => [s.index, s])),
-      options,
-      videoDurationSec
-    })
-    const clip = landed.clips[0]
-    const parts = clip ? candidateRanges(clip) : []
-    const joinsBoth = clip?.stitch !== undefined && parts.length > 1 &&
-      parts[0].start <= setup[setup.length - 1].end && parts[parts.length - 1].end >= payoff[0].start
-    if (clip && joinsBoth) clips.push(clip)
-    else if (process.env.CUTAWAN_DEBUG) {
-      console.error(`[highlights] long-range pairing ${n} gave no joined clip: ${landed.violations.join(' ') || 'not a join of both moments'}`)
+  /** Land every answered pairing; what could not be landed comes back as plain-words problems. */
+  const land = (answer: LongRangeResponse, fit = false): { clips: Clip[]; violations: string[] } => {
+    const clips: Clip[] = []
+    const violations: string[] = []
+    const answered = new Set<number>()
+    for (const raw of Array.isArray(answer?.clips) ? answer.clips : []) {
+      if (!raw || typeof raw !== 'object') continue
+      const n = parseLineId(raw.pairing)
+      // One clip per pairing, and only for a pairing that was shown.
+      if (n === undefined || Number.isNaN(n) || !shown[n] || answered.has(n)) continue
+      answered.add(n)
+      const { setup, payoff } = shown[n]
+      const fitted = fit ? fitRaw(raw, [...setup, ...payoff]) : raw
+      const landed = landSelection({ clips: [fitted] }, {
+        transcript,
+        sentences,
+        shown: new Map([...setup, ...payoff].map((s) => [s.index, s])),
+        options,
+        videoDurationSec
+      })
+      const clip = landed.clips[0]
+      const parts = clip ? candidateRanges(clip) : []
+      const joinsBoth = clip?.stitch !== undefined && parts.length > 1 &&
+        parts[0].start <= setup[setup.length - 1].end && parts[parts.length - 1].end >= payoff[0].start
+      if (clip && joinsBoth) {
+        clips.push(clip)
+        continue
+      }
+      const why = landed.violations.length > 0
+        ? landed.violations.map((v) => v.replace(/^Clip \d+/, `Pairing ${n}`)).join(' ')
+        : `Pairing ${n}: the clip must include lines from both the first and the second moment.`
+      violations.push(why)
+      if (process.env.CUTAWAN_DEBUG) console.error(`[highlights] long-range pairing ${n} gave no joined clip: ${why}`)
+    }
+    return { clips, violations }
+  }
+
+  /** The raw clip with its segments fitted to the cap, when that is possible; otherwise unchanged. */
+  const fitRaw = (raw: RawHighlight & { pairing?: unknown }, lines: Sentence[]): RawHighlight & { pairing?: unknown } => {
+    if (!Array.isArray(raw.segments)) return raw
+    const byIndex = new Map(lines.map((l) => [l.index, l]))
+    const spans = raw.segments.map((seg) => ({ start: parseLineId(seg?.start_line), end: parseLineId(seg?.end_line) }))
+    if (spans.some((sp) => sp.start === undefined || sp.end === undefined || Number.isNaN(sp.start) || Number.isNaN(sp.end))) return raw
+    const fittedSpans = fitJoinedSegments(spans as Array<{ start: number; end: number }>, (i) => byIndex.get(i), maxDurationFor(options.clipLength))
+    if (!fittedSpans) return raw
+    return { ...raw, segments: fittedSpans.map((sp) => ({ start_line: sp.start, end_line: sp.end })) }
+  }
+
+  let result = land(res)
+  // The same single correction the selection pass gets: a joined clip that
+  // came back over the cap is the commonest slip, and the model can fix it.
+  if (result.violations.length > 0 && result.violations.length <= MAX_REPAIR_VIOLATIONS) {
+    try {
+      const repaired = await chatJSON<LongRangeResponse>(
+        apiKey,
+        model,
+        [
+          { role: 'system', content: `${SYSTEM_PROMPT}\n\n${STITCH_PROMPT}\n\n${LONG_RANGE_PROMPT}` },
+          { role: 'user', content: repairPrompt(user, res, result.violations) }
+        ],
+        'long_range_joins',
+        longRangeSchema(),
+        signal
+      )
+      if (process.env.CUTAWAN_DEBUG) console.error('[highlights] corrected long-range joins:', JSON.stringify(repaired, null, 2))
+      let second = land(repaired)
+      // Still over the cap after the correction: trim whole sentences
+      // (see fitJoinedSegments); the reviews that follow judge the result.
+      if (second.clips.length === 0 && result.clips.length === 0) {
+        const fitted = land(repaired, true)
+        if (process.env.CUTAWAN_DEBUG) console.error(`[highlights] long-range joins fitted to the cap: ${fitted.clips.length} clip(s)`)
+        second = fitted
+      }
+      if (second.clips.length > result.clips.length) result = second
+    } catch (err) {
+      throwIfSubscriptionError(err)
+      if (signal?.aborted) throw err
+      console.error('Long-range join repair failed; keeping the first answer:', err)
     }
   }
+  const clips = result.clips
   return dedupeClips(clips.sort((a, b) => b.viralityScore - a.viralityScore))
+}
+
+/**
+ * A last resort for a joined clip that is still over the length cap after
+ * its one correction: drop whole sentences from the end of the first
+ * segment, then of the last, until it fits, keeping every segment's opening
+ * line. Both openings are what the pairing is about (the setup's question,
+ * the start of its answer); what goes is elaboration. The clip still has to
+ * pass the join review and the ending review, so a trim that cuts away the
+ * point is caught there rather than shipped. Returns null when even the
+ * openings do not fit. Exported for tests.
+ */
+export function fitJoinedSegments(
+  segments: Array<{ start: number; end: number }>,
+  lineTime: (index: number) => { start: number; end: number } | undefined,
+  maxPlayedSec: number
+): Array<{ start: number; end: number }> | null {
+  const out = segments.map((s) => ({ ...s }))
+  const played = (): number => out.reduce((sum, seg) => {
+    const a = lineTime(seg.start), b = lineTime(seg.end)
+    return a && b ? sum + b.end - a.start : Infinity
+  }, 0)
+  // A margin for the roll added around each part when it is landed.
+  const budget = maxPlayedSec - 1.5 * out.length
+  const order = out.length > 1 ? [0, out.length - 1, ...out.slice(1, -1).map((_, i) => i + 1)] : [0]
+  for (const i of order) {
+    while (played() > budget && out[i].end > out[i].start) out[i].end--
+  }
+  return played() <= budget ? out : null
 }
 
 /** Where the outline lives between runs, and whose model built it. */
@@ -1514,7 +1640,7 @@ export async function detectHighlights(
   const joinChecked = await reviewJoins(apiKey, model, transcript, found, signal)
   // Free and deterministic, so before the reviews: the ending and opening
   // reviews then judge the clip as it now opens.
-  const { clips, dangling } = checkClipOpenings(transcript, joinChecked, videoDurationSec)
+  const { clips, dangling } = checkClipOpenings(transcript, joinChecked, videoDurationSec, maxDuration)
   onProgress?.({ fraction: FIND_SHARE, message: 'Checking clip endings…' })
   const refined = await refineClipEndings(apiKey, model, transcript, clips, videoDurationSec, maxDuration, signal)
   if (options.hookFirst) onProgress?.({ fraction: (1 + FIND_SHARE) / 2, message: 'Checking clip openings…' })
@@ -1709,7 +1835,13 @@ export function landSelection(res: Partial<HighlightResponse> | null | undefined
     let end = moments[moments.length - 1].end
     const played = moments.reduce((sum, m) => sum + m.end - m.start, 0)
     if (played > maxDur) {
-      problems.push(`${name} runs about ${Math.round(played)} seconds; the limit is ${maxDur} seconds.`)
+      // For a joined clip, say how long each part is and what to keep: told
+      // only the total, a model shaves a few lines and comes back still over
+      // (measured live: 303 s, then 122 s, against a 100 s cap).
+      const perPart = moments.length > 1
+        ? ` Its segments run ${moments.map((m) => `${Math.round(m.end - m.start)}`).join(', ')} seconds; keep only the lines of each that carry the clip, about ${Math.max(MIN_SEGMENT_SEC, Math.floor(maxDur * 0.45 / moments.length))} seconds or less per segment.`
+        : ''
+      problems.push(`${name} runs about ${Math.round(played)} seconds; the limit is ${maxDur} seconds. Do not just trim it to fit: choose the strongest complete stretch of that moment, usually ${repairLengthBand(ctx.options.clipLength)}.${perPart}`)
     }
     if (moments.length > 1) {
       const short = moments.filter((m) => m.end - m.start < MIN_SEGMENT_SEC)

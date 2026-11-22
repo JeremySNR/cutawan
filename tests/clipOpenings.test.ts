@@ -4,6 +4,7 @@ import {
   isEnglishLanguage,
   isLeadInFragment,
   reviewOpening,
+  rewindOpening,
   type OpeningLine
 } from '@shared/clipOpenings'
 
@@ -125,5 +126,34 @@ describe('reviewOpening', () => {
 
   it('does nothing with no lines', () => {
     expect(reviewOpening([], limits)).toEqual({ skip: 0, dangling: null })
+  })
+})
+
+describe('rewindOpening', () => {
+  const line = (start: number, text: string) => ({ start, end: start + 2, text })
+  const limits = { playedSec: 30, maxPlayedSec: 60, firstLineStart: 20 }
+
+  it('steps back to the line a dangling opening continues', () => {
+    expect(rewindOpening([line(10, 'Unrelated.'), line(16, 'The rich do it the other way around.')], limits)).toBe(1)
+  })
+
+  it('steps past a line that leans back too, but no further than two', () => {
+    expect(rewindOpening([line(12, 'Most people get this one thing wrong.'), line(16, 'But they never notice.')], limits)).toBe(2)
+    expect(rewindOpening([line(6, 'Clean.'), line(12, 'And another.'), line(16, 'But they never notice.')], limits)).toBe(0)
+  })
+
+  it('skips throwaway lead-ins rather than opening on them', () => {
+    expect(rewindOpening([line(14, 'Here is the real point we need.'), line(18, 'Yeah.')], limits)).toBe(2)
+  })
+
+  it('will not open on a short reaction', () => {
+    expect(rewindOpening([line(16, 'Oh no.')], limits)).toBe(0)
+    expect(rewindOpening([line(16, 'Delightful, but terrifying.')], limits)).toBe(0)
+  })
+
+  it('refuses when the clip would break its cap or reach too far back', () => {
+    expect(rewindOpening([line(16, 'The rich do it the other way around.')], { ...limits, maxPlayedSec: 33 })).toBe(0)
+    expect(rewindOpening([line(2, 'Long ago.')], limits)).toBe(0)
+    expect(rewindOpening([], limits)).toBe(0)
   })
 })
