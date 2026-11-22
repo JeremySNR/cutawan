@@ -160,6 +160,18 @@ async function runSmokeCapture(win: BrowserWindow, dir: string): Promise<void> {
   await sleep(600)
   if (await hasText('1 cut')) throw new Error('Smoke capture: undo did not restore the cut piece')
   if (await hasText('Review edits')) throw new Error('Smoke capture: undo did not restore the assessed selection')
+  // Caption emphasis, title styles, cold open and sound: turn on the cold
+  // open, emoji and effects, show the sidebar's opening and sound controls,
+  // then put the clip back as it was.
+  const toggles = ['cold-open-toggle', 'emoji-toggle', 'sfx-toggle']
+  for (const id of toggles) await click(`[data-testid="${id}"]`)
+  await win.webContents.executeJavaScript(
+    `document.querySelector('[data-testid="title-styles"]')?.scrollIntoView({ block: 'start' })`
+  )
+  await sleep(600)
+  if (!(await hasText('Opens on'))) throw new Error('Smoke capture: the cold open did not find a line to replay')
+  await shot('editor-opening')
+  for (const id of toggles) await click(`[data-testid="${id}"]`)
   // Out to the setup screen, which is where the two modes are chosen.
   await click('[data-testid="back-button"]')
   await click('[data-testid="regenerate-button"]')

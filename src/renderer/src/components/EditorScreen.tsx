@@ -465,6 +465,7 @@ export default function EditorScreen(): React.JSX.Element {
               />
               <Toggle
                 label="Emoji after some key words"
+                testId="emoji-toggle"
                 checked={clip.edit.emoji === true}
                 disabled={clip.edit.emphasis === false}
                 onChange={(v) => set({ emoji: v })}
@@ -540,6 +541,7 @@ export default function EditorScreen(): React.JSX.Element {
           <div className="mt-2">
             <Toggle
               label="Cold open — replay the strongest line first"
+              testId="cold-open-toggle"
               checked={clip.edit.coldOpen === true}
               onChange={(v) => set({ coldOpen: v })}
             />
@@ -556,6 +558,7 @@ export default function EditorScreen(): React.JSX.Element {
         <Section icon={Music} title="Sound">
           <Toggle
             label="Sound effects — whoosh on cuts, pop on the title"
+            testId="sfx-toggle"
             checked={clip.edit.soundEffects === true}
             disabled={!project.video.hasAudio}
             onChange={(v) => set({ soundEffects: v })}
@@ -857,16 +860,20 @@ function Toggle({
   label,
   checked,
   disabled = false,
+  testId,
   onChange
 }: {
   label: string
   checked: boolean
   disabled?: boolean
+  testId?: string
   onChange: (v: boolean) => void
 }): React.JSX.Element {
   return (
     <button
       type="button"
+      data-testid={testId}
+      aria-pressed={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={`flex w-full items-center justify-between gap-3 rounded-lg border border-surface-600 px-3 py-2.5 text-left text-xs font-medium transition ${

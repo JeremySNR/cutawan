@@ -25,6 +25,10 @@ const IDEAL_SEC = 2.6
 /** Breathing room around the words, inside the neighbouring words' gaps. */
 const LEAD_SEC = 0.08
 const TAIL_SEC = 0.2
+/** A part of a long sentence needs at least this many words to stand alone. */
+const MIN_PARTIAL_WORDS = 3
+/** How much a part of a sentence ranks below a whole phrase. */
+const PARTIAL_PENALTY = 0.2
 
 export type ColdOpenClip = Pick<Clip, 'edit' | 'hook'>
 
@@ -77,31 +81,46 @@ export function planColdOpen(
   const strength = new Map(words.map((w, i) => [w, scores[i]]))
 
   const candidates: Candidate[] = []
+  /** Score a run of words as a cold open; `partial` runs cut a sentence and rank lower. */
+  const consider = (run: TranscriptWord[], partial: boolean): void => {
+    const first = run[0], last = run[run.length - 1]
+    const duration = last.end - first.start
+    const segment = segmentOf(first)
+    if (!segment || segmentOf(last) !== segment) return
+    if (duration < COLD_OPEN_MIN_SEC || duration > COLD_OPEN_MAX_SEC) return
+    if (map.toOutput(first.start) < COLD_OPEN_MIN_OFFSET_SEC) return
+    const keys = new Set(run.map((w) => emphasisKey(w.text)))
+    const hookMatches = [...hookKeys].filter((k) => keys.has(k)).length
+    const hookScore = hookKeys.size ? hookMatches / hookKeys.size : 0
+    const fit = Math.max(0, 1 - Math.abs(duration - IDEAL_SEC) / 3)
+    const ending = /[.!?]["'”’)]*$/.test(last.text) ? (/[!?]/.test(last.text) ? 0.25 : 0.15) : 0
+    const punch = run.reduce((sum, w) => sum + Math.min(4, strength.get(w) ?? 0), 0) / (run.length * 4)
+    const energy = energyAt((first.start + last.end) / 2)
+    candidates.push({
+      words: run,
+      segment,
+      hookScore,
+      hookMatches,
+      score: energy + ending + punch * 0.6 + fit * 0.25 - (partial ? PARTIAL_PENALTY : 0)
+    })
+  }
   for (let i = 0; i < phrases.length; i++) {
     let run: TranscriptWord[] = []
     for (let j = i; j < phrases.length; j++) {
       run = [...run, ...phrases[j]]
-      const first = run[0], last = run[run.length - 1]
-      const duration = last.end - first.start
-      if (duration > COLD_OPEN_MAX_SEC) break
-      const segment = segmentOf(first)
-      if (!segment || segmentOf(last) !== segment) break
-      if (duration < COLD_OPEN_MIN_SEC) continue
-      if (map.toOutput(first.start) < COLD_OPEN_MIN_OFFSET_SEC) continue
-      const keys = new Set(run.map((w) => emphasisKey(w.text)))
-      const hookMatches = [...hookKeys].filter((k) => keys.has(k)).length
-      const hookScore = hookKeys.size ? hookMatches / hookKeys.size : 0
-      const fit = Math.max(0, 1 - Math.abs(duration - IDEAL_SEC) / 3)
-      const ending = /[.!?]["'”’)]*$/.test(last.text) ? (/[!?]/.test(last.text) ? 0.25 : 0.15) : 0
-      const punch = run.reduce((sum, w) => sum + Math.min(4, strength.get(w) ?? 0), 0) / (run.length * 4)
-      const energy = energyAt((first.start + last.end) / 2)
-      candidates.push({
-        words: run,
-        segment,
-        hookScore,
-        hookMatches,
-        score: energy + ending + punch * 0.6 + fit * 0.25
-      })
+      if (run[run.length - 1].end - run[0].start > COLD_OPEN_MAX_SEC) break
+      consider(run, false)
+    }
+    // A sentence too long to replay whole still offers its opening words or
+    // its punchline: the longest head and tail that fit.
+    const phrase = phrases[i]
+    if (phrase[phrase.length - 1].end - phrase[0].start > COLD_OPEN_MAX_SEC) {
+      let head = phrase.length
+      while (head > MIN_PARTIAL_WORDS && phrase[head - 1].end - phrase[0].start > COLD_OPEN_MAX_SEC) head--
+      if (head >= MIN_PARTIAL_WORDS) consider(phrase.slice(0, head), true)
+      let tail = 0
+      while (phrase.length - tail > MIN_PARTIAL_WORDS && phrase[phrase.length - 1].end - phrase[tail].start > COLD_OPEN_MAX_SEC) tail++
+      if (phrase.length - tail >= MIN_PARTIAL_WORDS) consider(phrase.slice(tail), true)
     }
   }
   if (!candidates.length) return null

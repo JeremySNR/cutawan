@@ -14,8 +14,11 @@ import { automaticLayoutShots, detailCaptionRanges } from './contentType'
  * certain leaves the style's own position alone.
  */
 
-/** Caption line height in em, as both renderers lay it out. */
-const LINE_HEIGHT_EM = 1.25
+/**
+ * Caption line pitch in em: libass advances lines by the font's win ascent +
+ * descent, about 1.75 em for the fonts we ship (see captionLinePitchEm).
+ */
+const LINE_HEIGHT_EM = 1.75
 /** Gap kept between a caption block and what it steps around. */
 const CLEARANCE = 0.02
 /** Never place captions outside this vertical band (short-form app UI). */
