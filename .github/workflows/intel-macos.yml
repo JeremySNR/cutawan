@@ -1,0 +1,100 @@
+name: Intel macOS build (Monterey)
+
+# Keep this independent of the upstream arm64 release pipeline.
+# It packages a signed-for-integrity (not Developer ID notarized) Intel app,
+# runs the existing packaged-app smoke checks and uploads test installers.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/intel-macos.yml'
+      - 'scripts/check-mac-package.sh'
+      - 'scripts/adhoc-sign-mac.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'src/**'
+      - 'resources/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: intel-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  intel-monterey:
+    name: Package and smoke-test Intel x64
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Resolve Intel-compatible ONNX Runtime before clean install
+        # ONNX Runtime Node 1.24+ omitted the macOS x86_64 native binding.
+        # Regenerate only this runner's local dependency lock, not the source fork.
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pkg set 'dependencies.onnxruntime-node=1.23.2'
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Install pinned Intel dependencies
+        run: npm ci
+      - name: Verify Intel ONNX Runtime native binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node
+          node -e "require('onnxruntime-node'); console.log('Intel ONNX binding loaded')"
+      - name: Check TypeScript
+        run: npm run typecheck
+      - name: Build Intel x64 .app, .dmg and .zip
+        # electron-builder packages natively for x86_64 on this runner.
+        # Never publish these test files as an upstream Cutawan release.
+        run: npm run package -- --mac --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify x86_64 bundle and signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="release/mac/Cutawan.app"
+          test -d "$APP"
+          file "$APP/Contents/MacOS/Cutawan"
+          file "$APP/Contents/MacOS/Cutawan" | grep -q 'x86_64'
+          file "$APP/Contents/Frameworks/Electron Framework.framework/Electron Framework" | grep -q 'x86_64'
+          codesign --verify --deep --strict "$APP"
+          test -f "$APP/Contents/Resources/app.asar.unpacked/node_modules/onnxruntime-node/bin/napi-v6/darwin/x64/onnxruntime_binding.node"
+          test -n "$(find release -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$(find release -maxdepth 1 -name '*.zip' -print -quit)"
+      - name: Exercise packaged pipeline and UI
+        shell: bash
+        run: bash scripts/check-mac-package.sh release/mac/Cutawan.app .tmp/intel-mac-package-check
+      - name: Create SHA-256 checksums
+        shell: bash
+        run: |
+          cd release
+          shasum -a 256 ./*.dmg ./*.zip > SHA256SUMS-intel.txt
+      - name: Upload Intel Mac installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cutawan-Intel-Monterey-x64
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/SHA256SUMS-intel.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostic smoke results if build fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Intel-Mac-Smoke-Diagnostics
+          path: .tmp/intel-mac-package-check/
+          if-no-files-found: ignore
+          retention-days: 7
