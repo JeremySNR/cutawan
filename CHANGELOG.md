@@ -6,6 +6,18 @@ the [releases page](https://github.com/JeremySNR/cutawan/releases).
 This project uses [semantic versioning](https://semver.org/), loosely: while
 still pre-1.0, minor bumps carry new features and patch bumps carry fixes.
 
+## [Unreleased]
+
+### Fixed
+
+- **Local Whisper no longer fails on the first file after a fresh install** ([#82](https://github.com/JeremySNR/cutawan/issues/82)). A new release of PyAV, a library faster-whisper uses to read audio, broke every install made after it came out. Cutawan now reads the audio with its own bundled ffmpeg, so existing installs work again after updating, with no reinstall. New installs also pin the versions Cutawan was tested with, and **Check setup** now tests audio decoding too, so a broken setup shows before your first job.
+- **A slow ChatGPT reply no longer loses the whole Get clips run** ([#83](https://github.com/JeremySNR/cutawan/issues/83)). On the ChatGPT/Codex connection:
+  - A request that takes longer than five minutes is retried once. Both tries count towards your daily cap.
+  - If Codex had already written its answer before stalling, that answer is used, with no second request.
+  - Codex finishing without closing its output no longer leaves Cutawan waiting until the time limit.
+  - The sign-in check has its own short time limit, so it can't eat into the request's.
+  - Errors now say whether the request was cancelled or timed out, and a timeout shows the last thing Codex printed.
+
 ## [0.16.0] - 2026-11-22
 
 Clips you can take further: translated captions and AI voice dubs, timelines you can open in Premiere Pro, DaVinci Resolve or Final Cut Pro, a cold open, sound and music, and a check of every export. Clip finding now hears who is speaking and how the audience reacts.

@@ -6,6 +6,7 @@ import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/p
 import { basename, delimiter, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { analysisRequests as requests } from './pipeline/mediaJobs'
+import { FFMPEG_PATH } from './pipeline/ffmpeg'
 import { DEFAULT_SUBSCRIPTION, MAX_SUBSCRIPTION_IMAGES, type SubscriptionSettings } from '@shared/subscription'
 import type { ChatMessage, TranscribeFileOptions, WhisperResponse } from './pipeline/openai'
 
@@ -82,6 +83,23 @@ export function cmdLine(parts: string[]): string {
   return parts.map((part) => `"${part.replace(/"/g, '""')}"`).join(' ')
 }
 
+/** How long to wait for the output pipes to close after the process exits. */
+let EXIT_GRACE_MS = 5_000
+
+/** Tests only: shorten the provider time limits. */
+export function setProviderTimeoutsForTests(limits: { requestMs?: number; loginMs?: number; exitGraceMs?: number }): void {
+  REQUEST_TIMEOUT_MS = limits.requestMs ?? REQUEST_TIMEOUT_MS
+  LOGIN_TIMEOUT_MS = limits.loginMs ?? LOGIN_TIMEOUT_MS
+  EXIT_GRACE_MS = limits.exitGraceMs ?? EXIT_GRACE_MS
+}
+
+const redact = (text: string): string => text.replace(/(?:sk-|Bearer\s+)\S+/gi, '[redacted]')
+
+/** The provider was stopped: by our own timer (`timedOut`) or by the caller. */
+export class ProviderAbort extends Error {
+  constructor(readonly timedOut: boolean, message: string) { super(message) }
+}
+
 async function run(executable: string, args: string[], input: string, signal: AbortSignal): Promise<string> {
   signal.throwIfAborted()
   const { command, prefix, node, shell } = commandFor(executable)
@@ -112,22 +130,44 @@ async function run(executable: string, args: string[], input: string, signal: Ab
     signal.addEventListener('abort', stop, { once: true })
     if (signal.aborted) stop()
     let stdout = '', stderr = ''
+    let settled = false
+    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    const settle = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(graceTimer)
+      cleanup()
+      fn()
+    }
     child.stdout.on('data', data => {
       stdout += String(data)
-      if (stdout.length > 16_000_000) { stop(); reject(new Error('Local provider exceeded its output limit.')) }
+      if (stdout.length > 16_000_000) { stop(); settle(() => reject(new Error('Local provider exceeded its output limit.'))) }
     })
     child.stderr.on('data', data => { stderr = (stderr + String(data)).slice(-4000) })
-    child.on('error', error => {
-      cleanup()
+    child.on('error', error => settle(() => {
       const hint = executable === 'codex'
         ? ' If Codex works in Terminal, paste the full path from "command -v codex" into Codex executable.'
         : ''
       reject(new Error(`Could not run ${executable}. Check its path in Settings.${hint} ${error.message}`))
+    }))
+    const finish = (code: number | null): void => settle(() => {
+      if (code === 0 && !signal.aborted) return accept(stdout || stderr)
+      const detail = redact(stderr).trim()
+      if (signal.aborted) {
+        const timedOut = signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError'
+        return reject(new ProviderAbort(timedOut, timedOut
+          ? `Local provider did not answer in time.${detail ? ` Last output: ${detail.slice(-600)}` : ''}`
+          : 'Local provider cancelled.'))
+      }
+      reject(new Error(`Local provider exited (${code}). Check setup, sign-in and subscription limits. ${detail}`))
     })
-    child.on('close', code => { cleanup(); return code === 0 && !signal.aborted ? accept(stdout || stderr) : reject(new Error(
-      signal.aborted ? 'Local provider cancelled or timed out.' :
-        `Local provider exited (${code}). Check setup, sign-in and subscription limits. ${stderr.replace(/(?:sk-|Bearer\s+)\S+/gi, '[redacted]')}`
-    )) })
+    child.on('close', code => finish(code))
+    // A launcher can exit while a process it started keeps the output pipe
+    // open, so 'close' never comes (issue #83). Its answer is already on disk:
+    // settle shortly after the exit and stop what is left.
+    child.on('exit', code => {
+      graceTimer = setTimeout(() => { stop(); finish(code) }, EXIT_GRACE_MS)
+    })
     child.stdin.on('error', () => { /* handled by close/error */ })
     child.stdin.end(input)
   })
@@ -153,7 +193,7 @@ export async function checkSubscriptionSetup(): Promise<{ message: string; reque
 export async function checkLocalWhisperSetup(): Promise<{ message: string }> {
   const config = { ...preferences }
   if (!config.whisperModelPath) throw new Error('Install local Whisper or choose a model folder first.')
-  await run(config.pythonPath, [scriptPath(), '--check'], JSON.stringify({ modelPath: config.whisperModelPath }), AbortSignal.timeout(30_000))
+  await run(config.pythonPath, [scriptPath(), '--check'], JSON.stringify({ modelPath: config.whisperModelPath, ffmpegPath: FFMPEG_PATH }), AbortSignal.timeout(30_000))
   return { message: 'Local Whisper dependencies and model files are ready. No transcription was run.' }
 }
 
@@ -207,6 +247,21 @@ function waitForPrevious(previous: Promise<unknown>, signal?: AbortSignal): Prom
   })
 }
 
+/** Per request; the editorial review batches on a two-hour source were the slowest at 46 s (issue #83). */
+let REQUEST_TIMEOUT_MS = 5 * 60_000
+let LOGIN_TIMEOUT_MS = 15_000
+/** One retry, and only after our own timeout: a provider stall rarely repeats. */
+const REQUEST_ATTEMPTS = 2
+
+/** The answer a request left on disk, if it is complete JSON. */
+async function completeAnswer<T>(path: string): Promise<T | undefined> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as T
+  } catch {
+    return undefined
+  }
+}
+
 export async function subscriptionJSON<T>(messages: ChatMessage[], schema: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const config = { ...preferences }
   const key = createHash('sha256').update(JSON.stringify({ version: 1, model: config.codexModel, reasoning: 'low', messages, schema })).digest('hex')
@@ -221,9 +276,9 @@ export async function subscriptionJSON<T>(messages: ChatMessage[], schema: Recor
     if (existsSync(cache)) return JSON.parse(await readFile(cache, 'utf8')) as T
     const used = await requestsToday()
     if (used >= config.dailyRequestLimit) throw new Error(`ChatGPT daily request cap reached (${used}/${config.dailyRequestLimit}). Cached results still work. Change the cap in Settings to allow more; no paid API fallback is used.`)
-    const timeout = AbortSignal.timeout(5 * 60_000)
-    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
-    await assertChatGptLogin(config, combined)
+    // The sign-in check has its own short budget, so it cannot eat into the request's.
+    const loginBudget = AbortSignal.timeout(LOGIN_TIMEOUT_MS)
+    await assertChatGptLogin(config, signal ? AbortSignal.any([signal, loginBudget]) : loginBudget)
     const dir = await mkdtemp(join(root, 'request-'))
     try {
       const images: string[] = []
@@ -245,12 +300,30 @@ export async function subscriptionJSON<T>(messages: ChatMessage[], schema: Recor
         sections.push(`${message.role.toUpperCase()} MESSAGE\n${text.join('\n')}`)
       }
       await writeFile(join(dir, 'schema.json'), JSON.stringify(schema))
-      // Serialize only the reservation; independent model requests can overlap.
-      // Count failures too: retries cannot quietly spend more.
-      await reserveRequest(config.dailyRequestLimit)
-      await run(config.codexPath, codexArguments(config.codexModel, dir, images), sections.join('\n\n'), combined)
-      const response = await readFile(join(dir, 'response.json'), 'utf8')
-      const result = JSON.parse(response) as T
+      const answer = join(dir, 'response.json')
+      let result: T | undefined
+      for (let attempt = 1; result === undefined; attempt++) {
+        // Serialize only the reservation; independent model requests can overlap.
+        // Count failures too: the retry below is a counted request, so the
+        // daily cap still bounds it.
+        await reserveRequest(config.dailyRequestLimit)
+        const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+        try {
+          await run(config.codexPath, codexArguments(config.codexModel, dir, images), sections.join('\n\n'), signal ? AbortSignal.any([signal, timeout]) : timeout)
+          result = JSON.parse(await readFile(answer, 'utf8')) as T
+        } catch (error) {
+          // Never retry a cancel or an ordinary failure, only our own timer.
+          if (signal?.aborted || !(error instanceof ProviderAbort && error.timedOut)) throw error
+          // A stalled launcher can have written its whole answer before it hung.
+          const written = await completeAnswer<T>(answer)
+          if (written !== undefined) { result = written; break }
+          if (attempt >= REQUEST_ATTEMPTS) {
+            throw new Error(`ChatGPT did not answer within ${REQUEST_TIMEOUT_MS / 60_000} minutes, twice. Try again: finished steps are saved and are not repeated. ${error.message}`, { cause: error })
+          }
+          console.warn('[cutawan] ChatGPT request timed out; retrying once:', error.message)
+          await rm(answer, { force: true })
+        }
+      }
       await writeFile(cache, JSON.stringify(result))
       return result
     } finally {
@@ -272,7 +345,8 @@ export async function transcribeLocally(filePath: string, opts: TranscribeFileOp
   const timeout = AbortSignal.timeout(30 * 60_000)
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout
   const output = await run(config.pythonPath, [scriptPath()], JSON.stringify({
-    modelPath: config.whisperModelPath, path: filePath,
+    // Decoded with the bundled ffmpeg, not faster-whisper's PyAV (issue #82).
+    modelPath: config.whisperModelPath, path: filePath, ffmpegPath: FFMPEG_PATH,
     language: opts.language === 'auto' ? null : opts.language, prompt: opts.contextPrompt
   }), signal)
   const value = JSON.parse(output) as WhisperResponse
