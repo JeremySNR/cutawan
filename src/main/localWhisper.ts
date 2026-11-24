@@ -68,6 +68,14 @@ function run(command: string, args: string[], signal: AbortSignal, progress: (me
   })
 }
 
+/**
+ * Pinned, so an install made today matches one tested here. Unpinned,
+ * faster-whisper 1.2.1 pulled PyAV 19, which removed an argument it passes
+ * (issue #82). Transcription now decodes with Cutawan's ffmpeg anyway, but
+ * the pins keep the rest of the stack known-good. Bump them deliberately.
+ */
+export const WHISPER_PACKAGES = ['faster-whisper==1.2.1', 'av>=11,<19', 'huggingface-hub']
+
 export function cancelLocalWhisperInstall(): void { currentInstall?.abort() }
 
 export async function installLocalWhisper(
@@ -95,7 +103,7 @@ export async function installLocalWhisper(
       }
     }
     announce(0.2, 'Installing faster-whisper in the private environment…')
-    await run(paths.python, ['-m', 'pip', 'install', '--disable-pip-version-check', 'faster-whisper', 'huggingface-hub'],
+    await run(paths.python, ['-m', 'pip', 'install', '--disable-pip-version-check', ...WHISPER_PACKAGES],
       controller.signal, message => announce(0.3, message))
     // Apple Silicon also gets the MLX build, which transcribes on the GPU.
     // Optional: the CPU path still works if it cannot be installed.

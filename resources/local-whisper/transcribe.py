@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import subprocess
 import sys
 
 job = json.load(sys.stdin)
@@ -21,7 +22,39 @@ if sys.platform == "win32":
 import ctranslate2
 from faster_whisper import WhisperModel, decode_audio
 
+SAMPLE_RATE = 16000
+
+
+def load_audio(path):
+    """16 kHz mono float32 samples, decoded by Cutawan's bundled ffmpeg.
+
+    faster-whisper decodes with PyAV, and PyAV 19 removed an argument
+    faster-whisper 1.2.1 passes (issue #82), so every install made after that
+    release failed on its first file. Decoding here keeps transcription
+    independent of whichever PyAV pip picked. Without an ffmpeg path (an
+    older app), faster-whisper's own decoder is used as before.
+    """
+    ffmpeg = job.get("ffmpegPath")
+    if not ffmpeg:
+        return decode_audio(path, sampling_rate=SAMPLE_RATE)
+    import numpy as np
+    raw = subprocess.run(
+        [ffmpeg, "-nostdin", "-v", "error", "-i", path, "-f", "f32le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if raw.returncode != 0:
+        raise RuntimeError("ffmpeg could not decode the audio: " + raw.stderr.decode(errors="replace")[-500:])
+    return np.frombuffer(raw.stdout, dtype=np.float32).copy()
+
+
 if "--check" in sys.argv:
+    # Decode a moment of silence the way a real job does, so a broken audio
+    # stack shows at setup rather than on the first file.
+    if job.get("ffmpegPath"):
+        probe = subprocess.run(
+            [job["ffmpegPath"], "-nostdin", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono",
+             "-t", "0.1", "-f", "f32le", "-"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if probe.returncode != 0 or not probe.stdout:
+            raise RuntimeError("Cutawan's ffmpeg could not decode audio for local Whisper.")
     print(json.dumps({"ready": True}))
     sys.exit(0)
 
@@ -48,7 +81,7 @@ def transcribe_mlx(folder):
     """
     import mlx_whisper
     from faster_whisper.vad import VadOptions, get_speech_timestamps
-    audio = decode_audio(job["path"], sampling_rate=16000)
+    audio = load_audio(job["path"])
     speech = get_speech_timestamps(audio, VadOptions())
     duration = len(audio) / 16000
     result = {"language": job.get("language") or "", "duration": duration, "text": "", "words": [], "segments": []}
@@ -74,7 +107,7 @@ def transcribe_cpu():
     model = WhisperModel(str(model_path), device="cuda" if gpu else "cpu",
                          compute_type="float16" if gpu else "int8", local_files_only=True)
     segments, info = model.transcribe(
-        job["path"], language=job.get("language") or None, beam_size=5,
+        load_audio(job["path"]), language=job.get("language") or None, beam_size=5,
         word_timestamps=True, vad_filter=True, condition_on_previous_text=False,
         initial_prompt=job.get("prompt") or None)
     result = {"language": info.language, "duration": info.duration,

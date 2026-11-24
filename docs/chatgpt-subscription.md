@@ -15,7 +15,7 @@ Audio transcription runs locally with faster-whisper. Rendering and speaker trac
    python -m venv cutawan-whisper
    ```
 
-   On Windows, install using `cutawan-whisper\Scripts\python.exe -m pip install faster-whisper huggingface-hub`. On macOS/Linux, use `cutawan-whisper/bin/python -m pip install faster-whisper huggingface-hub`.
+   On Windows, install using `cutawan-whisper\Scripts\python.exe -m pip install "faster-whisper==1.2.1" "av>=11,<19" huggingface-hub`. On macOS/Linux, use `cutawan-whisper/bin/python -m pip install "faster-whisper==1.2.1" "av>=11,<19" huggingface-hub`.
 3. For manual setup, explicitly download a compatible model. For the large-v3 model used in our quality experiments, run this with that environment's Python (requires several GB of download and storage):
 
    ```sh

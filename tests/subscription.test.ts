@@ -133,7 +133,7 @@ it('stops a running inference on cancellation, including its Windows process tre
   })
   const kill = vi.spyOn(process, 'kill').mockImplementation(() => { setTimeout(() => active?.emit('close', 1), 0); return true })
   try {
-    await expect(subscriptionJSON(messages, schema, controller.signal)).rejects.toThrow('cancelled or timed out')
+    await expect(subscriptionJSON(messages, schema, controller.signal)).rejects.toThrow('Local provider cancelled.')
     if (process.platform === 'win32') expect(mock.spawn).toHaveBeenCalledWith('taskkill.exe', ['/PID', '1357911', '/T', '/F'], expect.objectContaining({ windowsHide: true, shell: false }))
     else expect(kill).toHaveBeenCalledWith(-1357911, 'SIGTERM')
   } finally { kill.mockRestore() }
